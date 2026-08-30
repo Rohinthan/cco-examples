@@ -1,0 +1,14 @@
+fn main() -> int {
+    let numbers = 12345;
+    let rev_numbers = 0;
+
+    print(f"Original number: {numbers}");
+
+    while (numbers > 0) {
+        rev_numbers = rev_numbers * 10 + (numbers % 10);
+        numbers /= 10;
+    }
+
+    print(f"Reversed number: {rev_numbers}");
+    return 0;
+}
