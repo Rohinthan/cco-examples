@@ -1,0 +1,14 @@
+fn main() -> int {
+    let age = 25;
+    let salary = 75000.50;
+    let name = "Alice";
+    let pi: float = 3.14159;
+
+    print("=== C++ Auto Types & Constants vs Cco ===");
+    print(f"Employee: {name}");
+    print(f"Age: {age}");
+    print(f"Salary: {salary}");
+    print(f"Constant Pi: {pi}");
+
+    return 0;
+}
