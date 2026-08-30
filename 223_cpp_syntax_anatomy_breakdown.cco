@@ -1,0 +1,8 @@
+fn main() -> int {
+    print("=== C++ Syntax Anatomy vs Cco ===");
+    print("Line 1: fn main() -> int defines the entry point.");
+    print("Line 2: print() outputs text with an automatic newline.");
+    print("Line 3: return 0 signals successful execution to the OS.");
+
+    return 0;
+}
