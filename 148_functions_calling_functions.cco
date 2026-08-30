@@ -1,0 +1,13 @@
+fn main() -> int {
+    first_function();
+    return 0;
+}
+
+fn first_function() -> void {
+    print("Some text in first_function");
+    second_function();
+}
+
+fn second_function() -> void {
+    print("Hey! Some text in second_function");
+}
