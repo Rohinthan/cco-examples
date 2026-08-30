@@ -1,0 +1,4 @@
+fn main() -> int {
+    print("Hello World from C++ & Cco!");
+    return 0;
+}
