@@ -1,0 +1,12 @@
+fn main() -> int {
+    let is_programming_fun = true;
+    let is_fish_tasty = false;
+
+    print("=== Boolean Variables ===");
+    print(is_programming_fun); // Prints true
+    print(is_fish_tasty);        // Prints false
+
+    print(f"Is programming fun: {is_programming_fun}");
+    print(f"Is fish tasty: {is_fish_tasty}");
+    return 0;
+}
