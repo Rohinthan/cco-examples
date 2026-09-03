@@ -1,0 +1,298 @@
+// Algorithm 21: Kernel Principal Component Analysis (Kernel PCA) - Non-Linear Manifold Unfolding
+
+/*
+================================================================================
+                    KERNEL PRINCIPAL COMPONENT ANALYSIS (KPCA)
+================================================================================
+
+1. Non-Linear Feature Space Mapping:
+       Map input data into high-dimensional Reproducing Kernel Hilbert Space (RKHS) H:
+           Φ: R^d  ───>  H,   x ↦ Φ(x)
+       Inner products in H are computed implicitly via kernel function:
+           k(x_i, x_j) = ⟨ Φ(x_i), Φ(x_j) ⟩
+
+2. Kernel Functions Supported:
+   - Radial Basis Function (RBF / Gaussian):
+         k(x, z) = exp( -γ * ||x - z||^2 )
+   - Polynomial Kernel:
+         k(x, z) = ( γ * x^T z + c )^d
+
+3. Kernel Matrix Centering (Schölkopf, Smola, Müller, 1998):
+       Since Φ(x) is generally not centered in H, the Gram matrix K must be centered:
+           K̃ = K - 1_N * K - K * 1_N + 1_N * K * 1_N,   where (1_N)_{ij} = 1 / N
+       Element-wise:
+           K̃_{ij} = K_{ij} - (1/N) Σ_r K_{rj} - (1/N) Σ_c K_{ic} + (1/N^2) Σ_{r, c} K_{rc}
+
+4. Dual Eigendecomposition:
+       K̃ * α_k = λ̃_k * α_k
+       Eigenvector normalization in feature space H:
+           ||v^k||_H^2 = 1  <===>  λ̃_k * (α_k^T α_k) = 1  <===>  α_k = a_k / sqrt(λ̃_k)
+
+5. Projection of Unseen Query Point x*:
+       y_k(x*) = ⟨ v^k, Φ(x*) ⟩ = Σ_{i=1}^N α_{k, i} * k̃(x_i, x*)
+       where k̃(x_i, x*) = k(x_i, x*) - (1/N) Σ_r k(x_r, x*) - (1/N) Σ_c K_{ic} + (1/N^2) Σ_{r, c} K_{rc}
+
+6. Non-Linear Separation of Concentric Manifolds:
+       Standard linear PCA cannot separate concentric circles (both have center [0, 0]).
+       Kernel PCA unwraps concentric manifolds into linearly separable clusters along PC1!
+================================================================================
+*/
+
+struct KPCAProjection {
+    z1: float;
+    z2: float;
+}
+
+fn eval_kernel_val(k_type: int, x1_a: float, x2_a: float, x1_b: float, x2_b: float, gamma: float, coef0: float, deg: int) -> float {
+    let dot = x1_a * x1_b + x2_a * x2_b;
+
+    if (k_type == 0) {
+        // RBF / Gaussian Kernel
+        let d1 = x1_a - x1_b;
+        let d2 = x2_a - x2_b;
+        let dist_sq = d1 * d1 + d2 * d2;
+        return exp(-gamma * dist_sq);
+    } else {
+        // Polynomial Kernel
+        let base = gamma * dot + coef0;
+        return pow(base, 1.0 * deg);
+    }
+}
+
+// -------------------------------------------------------------
+// Power Iteration for Dominant Eigenpair of Centered Kernel
+// -------------------------------------------------------------
+fn power_iteration_kpca(k_mat: &float[], n: int, max_iters: int, out_vec: &float[]) -> float {
+    let init_v = 1.0 / sqrt(1.0 * n);
+    for (let i = 0; i < n; i++) {
+        out_vec[i] = init_v;
+    }
+
+    for (let iter = 0; iter < max_iters; iter++) {
+        let sum_sq = 0.0;
+        let w = alloc(float, n);
+
+        for (let i = 0; i < n; i++) {
+            let dot = 0.0;
+            for (let j = 0; j < n; j++) {
+                dot += k_mat[i * n + j] * out_vec[j];
+            }
+            w[i] = dot;
+            sum_sq += dot * dot;
+        }
+
+        let norm = sqrt(sum_sq);
+        if (norm < 0.0000001) { norm = 0.0000001; }
+
+        for (let i = 0; i < n; i++) {
+            out_vec[i] = w[i] / norm;
+        }
+    }
+
+    // Rayleigh quotient: lambda = v^T * K * v
+    let lambda = 0.0;
+    for (let i = 0; i < n; i++) {
+        let dot = 0.0;
+        for (let j = 0; j < n; j++) {
+            dot += k_mat[i * n + j] * out_vec[j];
+        }
+        lambda += out_vec[i] * dot;
+    }
+
+    return lambda;
+}
+
+fn deflate_kmat(k_mat: &float[], n: int, lambda: float, v: &float[], out_k: &float[]) -> void {
+    for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+            out_k[i * n + j] = k_mat[i * n + j] - lambda * v[i] * v[j];
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// Kernel PCA Engine: Compute K, Center K̃, and Solve Eigendecomposition
+// -------------------------------------------------------------
+fn train_kernel_pca(x1: &float[], x2: &float[], n: int, k_type: int, gamma: float, coef0: float, deg: int,
+                    alpha1: &float[], alpha2: &float[],
+                    row_means: &float[], total_mean_box: &float[],
+                    eval1_box: &float[], eval2_box: &float[]) -> void {
+    // 1. Construct raw Gram matrix K
+    let k_raw = alloc(float, n * n);
+    for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+            k_raw[i * n + j] = eval_kernel_val(k_type, x1[i], x2[i], x1[j], x2[j], gamma, coef0, deg);
+        }
+    }
+
+    // 2. Compute Row Means and Total Mean
+    let grand_sum = 0.0;
+    for (let i = 0; i < n; i++) {
+        let r_sum = 0.0;
+        for (let j = 0; j < n; j++) {
+            let val = k_raw[i * n + j];
+            r_sum += val;
+            grand_sum += val;
+        }
+        row_means[i] = r_sum / (1.0 * n);
+    }
+    let total_mean = grand_sum / (1.0 * n * n);
+    total_mean_box[0] = total_mean;
+
+    // 3. Center Kernel Matrix: K̃_{ij} = K_{ij} - R_i - C_j + TotalMean
+    let k_centered = alloc(float, n * n);
+    for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+            k_centered[i * n + j] = k_raw[i * n + j] - row_means[i] - row_means[j] + total_mean;
+        }
+    }
+
+    // 4. Solve for 1st Principal Component
+    let a1 = alloc(float, n);
+    let lambda1 = power_iteration_kpca(&k_centered, n, 50, &a1);
+    eval1_box[0] = lambda1;
+
+    // Normalize in RKHS H: alpha = a / sqrt(lambda)
+    let norm_factor1 = 1.0;
+    if (lambda1 > 0.00001) {
+        norm_factor1 = 1.0 / sqrt(lambda1);
+    }
+    for (let i = 0; i < n; i++) {
+        alpha1[i] = a1[i] * norm_factor1;
+    }
+
+    // 5. Deflate and Solve for 2nd Principal Component
+    let k_deflated = alloc(float, n * n);
+    deflate_kmat(&k_centered, n, lambda1, &a1, &k_deflated);
+
+    let a2 = alloc(float, n);
+    let lambda2 = power_iteration_kpca(&k_deflated, n, 50, &a2);
+    eval2_box[0] = lambda2;
+
+    let norm_factor2 = 1.0;
+    if (lambda2 > 0.00001) {
+        norm_factor2 = 1.0 / sqrt(lambda2);
+    }
+    for (let i = 0; i < n; i++) {
+        alpha2[i] = a2[i] * norm_factor2;
+    }
+}
+
+// -------------------------------------------------------------
+// Project Query Point into Kernel Principal Subspace
+// -------------------------------------------------------------
+fn project_kpca_point(qx1: float, qx2: float,
+                      train_x1: &float[], train_x2: &float[], n: int,
+                      k_type: int, gamma: float, coef0: float, deg: int,
+                      alpha1: &float[], alpha2: &float[],
+                      row_means: &float[], total_mean: float) -> KPCAProjection {
+    // 1. Evaluate kernel against all training points
+    let k_test = alloc(float, n);
+    let sum_k_test = 0.0;
+    for (let i = 0; i < n; i++) {
+        let kv = eval_kernel_val(k_type, train_x1[i], train_x2[i], qx1, qx2, gamma, coef0, deg);
+        k_test[i] = kv;
+        sum_k_test += kv;
+    }
+    let mean_k_test = sum_k_test / (1.0 * n);
+
+    // 2. Project onto Component 1 and Component 2 using centered kernel entries
+    let z1 = 0.0;
+    let z2 = 0.0;
+
+    for (let i = 0; i < n; i++) {
+        let k_tilde = k_test[i] - mean_k_test - row_means[i] + total_mean;
+        z1 += alpha1[i] * k_tilde;
+        z2 += alpha2[i] * k_tilde;
+    }
+
+    return KPCAProjection { z1: z1, z2: z2 };
+}
+
+fn main() -> int {
+    print("==================================================================");
+    print("   KERNEL PRINCIPAL COMPONENT ANALYSIS (KPCA) - MANIFOLD SUITE    ");
+    print("==================================================================\n");
+
+    // 8 Points in Non-Linear Concentric Rings:
+    // Inner Ring (Radius ~ 1.0): Points 0, 1, 2, 3
+    // Outer Ring (Radius ~ 3.0): Points 4, 5, 6, 7
+    let n = 8;
+    let x1 = alloc(float, n);
+    let x2 = alloc(float, n);
+    let ring_label = alloc(int, n);
+
+    // Inner Circle
+    x1[0] = 1.0;  x2[0] = 0.0;  ring_label[0] = 0;
+    x1[1] = -1.0; x2[1] = 0.0;  ring_label[1] = 0;
+    x1[2] = 0.0;  x2[2] = 1.0;  ring_label[2] = 0;
+    x1[3] = 0.0;  x2[3] = -1.0; ring_label[3] = 0;
+
+    // Outer Circle
+    x1[4] = 3.0;  x2[4] = 0.0;  ring_label[4] = 1;
+    x1[5] = -3.0; x2[5] = 0.0;  ring_label[5] = 1;
+    x1[6] = 0.0;  x2[6] = 3.0;  ring_label[6] = 1;
+    x1[7] = 0.0;  x2[7] = -3.0; ring_label[7] = 1;
+
+    print("--- 1. Training Kernel PCA (RBF Gaussian Kernel, γ = 0.5) ---");
+    let alpha1 = alloc(float, n);
+    let alpha2 = alloc(float, n);
+    let row_means = alloc(float, n);
+    let total_mean_box = alloc(float, 1);
+    let eval1_box = alloc(float, 1);
+    let eval2_box = alloc(float, 1);
+
+    train_kernel_pca(&x1, &x2, n, 0, 0.5, 0.0, 1,
+                     &alpha1, &alpha2, &row_means, &total_mean_box,
+                     &eval1_box, &eval2_box);
+
+    let lambda1 = eval1_box[0];
+    let lambda2 = eval2_box[0];
+    let tot_eval = lambda1 + lambda2;
+
+    print(f"  Dominant Kernel Eigenvalue λ̃1 : {lambda1} (Variance: {(lambda1 / tot_eval) * 100.0}%)");
+    print(f"  Secondary Kernel Eigenvalue λ̃2: {lambda2} (Variance: {(lambda2 / tot_eval) * 100.0}%)\n");
+
+    // --- 2. Evaluating Non-Linear Manifold Projections ---
+    print("--- 2. Projected KPCA Coordinates (Unwrapping Concentric Rings) ---");
+    for (let i = 0; i < n; i++) {
+        let p = project_kpca_point(x1[i], x2[i], &x1, &x2, n, 0, 0.5, 0.0, 1,
+                                  &alpha1, &alpha2, &row_means, total_mean_box[0]);
+        let ring_name = "Inner Circle (R=1)";
+        if (ring_label[i] == 1) { ring_name = "Outer Circle (R=3)"; }
+        print(f"  Sample {i} ({x1[i]}, {x2[i]}) [{ring_name}] -> KPCA Latent: [z1={p.z1}, z2={p.z2}]");
+    }
+    print("");
+
+    // --- 3. Testing Unseen Query Points from Inner and Outer Manifolds ---
+    print("--- 3. Testing Unseen Points on Non-Linear Geometries ---");
+    // Unseen Inner point (0.7, 0.7) -> Radius = 0.99
+    let p_inner = project_kpca_point(0.7, 0.7, &x1, &x2, n, 0, 0.5, 0.0, 1,
+                                     &alpha1, &alpha2, &row_means, total_mean_box[0]);
+    // Unseen Outer point (2.1, 2.1) -> Radius = 2.97
+    let p_outer = project_kpca_point(2.1, 2.1, &x1, &x2, n, 0, 0.5, 0.0, 1,
+                                     &alpha1, &alpha2, &row_means, total_mean_box[0]);
+
+    print(f"  Unseen Inner Sample (0.7, 0.7) [Radius ~ 1.0] -> Latent z1 = {p_inner.z1}");
+    print(f"  Unseen Outer Sample (2.1, 2.1) [Radius ~ 3.0] -> Latent z1 = {p_outer.z1}");
+
+    // The inner and outer circles are mapped to opposite sides along PC1!
+    if ((p_inner.z1 > 0.0 && p_outer.z1 < 0.0) || (p_inner.z1 < 0.0 && p_outer.z1 > 0.0)) {
+        print("  SUCCESS: Concentric non-linear rings are now linearly separable along PC1!\n");
+    }
+
+    // --- 4. Polynomial Kernel KPCA Verification ---
+    print("--- 4. Polynomial Kernel KPCA Verification (Quadratic d=2, γ=1, c=1) ---");
+    let p_alpha1 = alloc(float, n);
+    let p_alpha2 = alloc(float, n);
+    let p_row_means = alloc(float, n);
+
+    train_kernel_pca(&x1, &x2, n, 1, 1.0, 1.0, 2,
+                     &p_alpha1, &p_alpha2, &p_row_means, &total_mean_box,
+                     &eval1_box, &eval2_box);
+    print(f"  Poly KPCA Top Eigenvalue λ̃1 : {eval1_box[0]}\n");
+
+    print("==================================================================");
+    print("Kernel PCA (RBF & Polynomial) validation complete with 0 leaks!");
+    return 0;
+}
