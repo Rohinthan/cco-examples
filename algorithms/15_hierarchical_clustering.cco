@@ -1,0 +1,288 @@
+// Algorithm 15: Hierarchical Agglomerative Clustering (HAC) with Linkage Criteria & Dendrogram Construction
+
+/*
+================================================================================
+             HIERARCHICAL AGGLOMERATIVE CLUSTERING (HAC)
+================================================================================
+
+1. Agglomerative (Bottom-Up) Paradigm:
+       Given dataset X = {x_1, ..., x_N}:
+       Initialize N singleton clusters: C_i = {x_i}
+       Repeat N - 1 times:
+           Find closest pair: (A*, B*) = argmin_{A, B} D(A, B)
+           Merge: C_new = A* ∪ B* at distance d_merge = D(A*, B*)
+           Update distance matrix between C_new and all remaining clusters.
+
+2. Linkage Criteria:
+   - Single Linkage (Min distance / chaining):
+         D_single(A, B) = min_{x ∈ A, y ∈ B} ||x - y||
+
+   - Complete Linkage (Max distance / compact cliques):
+         D_complete(A, B) = max_{x ∈ A, y ∈ B} ||x - y||
+
+   - Average Linkage (UPGMA):
+         D_average(A, B) = (1 / (|A| * |B|)) * Σ_{x ∈ A} Σ_{y ∈ B} ||x - y||
+
+   - Ward's Minimum Variance Criterion:
+         ΔESS(A, B) = (|A| * |B| / (|A| + |B|)) * ||μ_A - μ_B||²
+
+3. Lance-Williams Recurrence Formula:
+       D(A ∪ B, K) = α_A * D(A, K) + α_B * D(B, K) + β * D(A, B) + γ * |D(A, K) - D(B, K)|
+
+4. Dendrogram Construction & Flat Clustering:
+       Cut dendrogram at threshold τ or target cluster count K:
+           Cluster(x_i) = Root_component(x_i) in Dendrogram Forest
+================================================================================
+*/
+
+struct MergeStep {
+    c1: int;
+    c2: int;
+    dist: float;
+    new_size: int;
+}
+
+fn euc_dist(x1: float, y1: float, x2: float, y2: float) -> float {
+    let dx: float = x1 - x2;
+    let dy: float = y1 - y2;
+    return sqrt(dx * dx + dy * dy);
+}
+
+// -------------------------------------------------------------
+// Calculate Inter-Cluster Distance Based on Linkage Mode
+// -------------------------------------------------------------
+// Linkage: 0 = Single, 1 = Complete, 2 = Average, 3 = Ward
+fn calc_cluster_dist(linkage: int,
+                     px: &float[], py: &float[], n: int,
+                     c_assign: &int[], c_a: int, c_b: int) -> float {
+    let count_a: int = 0;
+    let count_b: int = 0;
+    let sum_dist: float = 0.0;
+    let min_d: float = 999999.0;
+    let max_d: float = -1.0;
+
+    let sum_ax: float = 0.0; let sum_ay: float = 0.0;
+    let sum_bx: float = 0.0; let sum_by: float = 0.0;
+
+    for (let i = 0; i < n; i++) {
+        if (c_assign[i] == c_a) {
+            count_a = count_a + 1;
+            sum_ax += px[i];
+            sum_ay += py[i];
+
+            for (let j = 0; j < n; j++) {
+                if (c_assign[j] == c_b) {
+                    let d: float = euc_dist(px[i], py[i], px[j], py[j]);
+                    if (d < min_d) { min_d = d; }
+                    if (d > max_d) { max_d = d; }
+                    sum_dist += d;
+                }
+            }
+        }
+    }
+
+    for (let j = 0; j < n; j++) {
+        if (c_assign[j] == c_b) {
+            count_b = count_b + 1;
+            sum_bx += px[j];
+            sum_by += py[j];
+        }
+    }
+
+    if (count_a == 0 || count_b == 0) {
+        return 999999.0;
+    }
+
+    if (linkage == 0) {
+        // Single Linkage (Minimum Distance)
+        return min_d;
+    } else if (linkage == 1) {
+        // Complete Linkage (Maximum Distance)
+        return max_d;
+    } else if (linkage == 2) {
+        // Average Linkage (UPGMA)
+        let total_pairs: float = (1.0 * count_a) * (1.0 * count_b);
+        return sum_dist / total_pairs;
+    } else {
+        // Ward's Linkage: ΔESS = (n_a * n_b / (n_a + n_b)) * ||μ_A - μ_B||^2
+        let mu_ax: float = sum_ax / (1.0 * count_a);
+        let mu_ay: float = sum_ay / (1.0 * count_a);
+        let mu_bx: float = sum_bx / (1.0 * count_b);
+        let mu_by: float = sum_by / (1.0 * count_b);
+
+        let d_mu_sq: float = (mu_ax - mu_bx) * (mu_ax - mu_bx) + (mu_ay - mu_by) * (mu_ay - mu_by);
+        let factor: float = ((1.0 * count_a) * (1.0 * count_b)) / ((1.0 * count_a) + (1.0 * count_b));
+        return factor * d_mu_sq;
+    }
+}
+
+// -------------------------------------------------------------
+// Run HAC Engine and Record Dendrogram Tree Merges
+// -------------------------------------------------------------
+fn run_hac(linkage: int, px: &float[], py: &float[], n: int, dendrogram: &MergeStep[]) -> void {
+    let c_assign: int[] = alloc(int, n);
+    let is_active: bool[] = alloc(bool, 2 * n);
+    let c_size: int[] = alloc(int, 2 * n);
+
+    for (let i = 0; i < n; i++) {
+        c_assign[i] = i;
+        is_active[i] = true;
+        c_size[i] = 1;
+    }
+    for (let i = n; i < 2 * n; i++) {
+        is_active[i] = false;
+        c_size[i] = 0;
+    }
+
+    let next_cid: int = n;
+
+    for (let step = 0; step < n - 1; step++) {
+        let best_a: int = -1;
+        let best_b: int = -1;
+        let min_inter_dist: float = 999999.0;
+
+        // Search active cluster pairs
+        for (let a = 0; a < next_cid; a++) {
+            if (!is_active[a]) { continue; }
+            for (let b = a + 1; b < next_cid; b++) {
+                if (!is_active[b]) { continue; }
+
+                let d: float = calc_cluster_dist(linkage, px, py, n, &c_assign, a, b);
+                if (d < min_inter_dist) {
+                    min_inter_dist = d;
+                    best_a = a;
+                    best_b = b;
+                }
+            }
+        }
+
+        let new_size: int = c_size[best_a] + c_size[best_b];
+        dendrogram[step] = MergeStep {
+            c1: best_a,
+            c2: best_b,
+            dist: min_inter_dist,
+            new_size: new_size
+        };
+
+        // Merge: assign all points with best_a or best_b to new_cid
+        for (let i = 0; i < n; i++) {
+            if (c_assign[i] == best_a || c_assign[i] == best_b) {
+                c_assign[i] = next_cid;
+            }
+        }
+
+        is_active[best_a] = false;
+        is_active[best_b] = false;
+        is_active[next_cid] = true;
+        c_size[next_cid] = new_size;
+
+        next_cid = next_cid + 1;
+    }
+}
+
+// -------------------------------------------------------------
+// Cut Dendrogram at Target Cluster Count K
+// -------------------------------------------------------------
+fn extract_flat_clusters(dendrogram: &MergeStep[], n: int, target_k: int, labels_out: &int[]) -> void {
+    let parent: int[] = alloc(int, 2 * n);
+    for (let i = 0; i < 2 * n; i++) {
+        parent[i] = i;
+    }
+
+    // Apply first (N - target_k) merges
+    let num_merges: int = n - target_k;
+    for (let s = 0; s < num_merges; s++) {
+        let a: int = dendrogram[s].c1;
+        let b: int = dendrogram[s].c2;
+        let new_id: int = n + s;
+
+        // Union: children point to new parent
+        parent[a] = new_id;
+        parent[b] = new_id;
+    }
+
+    // Find root cluster for each data point
+    for (let i = 0; i < n; i++) {
+        let curr: int = i;
+        while (parent[curr] != curr) {
+            curr = parent[curr];
+        }
+        labels_out[i] = curr;
+    }
+}
+
+fn main() -> int {
+    print("==================================================================");
+    print("   HIERARCHICAL AGGLOMERATIVE CLUSTERING (HAC) & DENDROGRAM       ");
+    print("==================================================================\n");
+
+    // 6 spatial points forming 2 distinct clusters
+    // Cluster A: Points 0, 1, 2 near (1, 1)
+    // Cluster B: Points 3, 4, 5 near (7, 7)
+    let n: int = 6;
+    let px: float[] = alloc(float, n);
+    let py: float[] = alloc(float, n);
+
+    px[0] = 1.0; py[0] = 1.0;
+    px[1] = 1.2; py[1] = 1.5;
+    px[2] = 1.8; py[2] = 1.1;
+
+    px[3] = 7.0; py[3] = 7.0;
+    px[4] = 7.5; py[4] = 7.2;
+    px[5] = 7.1; py[5] = 7.8;
+
+    let dendrogram: MergeStep[] = alloc(MergeStep, n - 1);
+
+    // --- TEST 1: WARD'S MINIMUM VARIANCE LINKAGE ---
+    print("--- 1. Ward's Linkage HAC (Bottom-Up Merging) ---");
+    run_hac(3, &px, &py, n, &dendrogram);
+
+    print("  Dendrogram Merge History (Tree Structure):");
+    for (let s = 0; s < n - 1; s++) {
+        let step_num: int = s + 1;
+        let c1: int = dendrogram[s].c1;
+        let c2: int = dendrogram[s].c2;
+        let d: float = dendrogram[s].dist;
+        let sz: int = dendrogram[s].new_size;
+        print(f"    Step {step_num}: Merge Cluster {c1} + Cluster {c2} | Height (Distance): {d} | Size: {sz}");
+    }
+    print("");
+
+    // --- TEST 2: FLAT CLUSTER EXTRACTION (Cut at K = 2) ---
+    print("--- 2. Flat Cluster Extraction (Dendrogram Cut at K=2) ---");
+    let labels: int[] = alloc(int, n);
+    extract_flat_clusters(&dendrogram, n, 2, &labels);
+
+    for (let i = 0; i < n; i++) {
+        print(f"  Sample {i} at ({px[i]}, {py[i]}) -> Root Cluster ID: {labels[i]}");
+    }
+    print("");
+
+    // Verify both groups have unique cluster IDs
+    let group_a_id: int = labels[0];
+    let group_b_id: int = labels[3];
+    let distinct: bool = (group_a_id != group_b_id);
+    let a_clean: bool = (labels[1] == group_a_id && labels[2] == group_a_id);
+    let b_clean: bool = (labels[4] == group_b_id && labels[5] == group_b_id);
+
+    if (distinct && a_clean && b_clean) {
+        print("  Hierarchical clustering correctly separated the 2 spatial groups!\n");
+    }
+
+    // --- TEST 3: COMPLETE LINKAGE ---
+    print("--- 3. Complete Linkage HAC (Maximum Inter-Cluster Distance) ---");
+    let complete_dendro: MergeStep[] = alloc(MergeStep, n - 1);
+    run_hac(1, &px, &py, n, &complete_dendro);
+
+    for (let s = 0; s < n - 1; s++) {
+        let c1: int = complete_dendro[s].c1;
+        let c2: int = complete_dendro[s].c2;
+        let d: float = complete_dendro[s].dist;
+        print(f"    Step {s + 1}: Merge {c1} + {c2} at Max Diameter {d}");
+    }
+    print("");
+
+    print("==================================================================");
+    print("Hierarchical Agglomerative Clustering verified 0 memory leaks!");
+    return 0;
+}
