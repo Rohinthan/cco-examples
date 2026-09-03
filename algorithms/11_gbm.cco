@@ -1,0 +1,373 @@
+// Algorithm 11: Gradient Boosting Machines (GBM) for Regression and Classification
+
+/*
+================================================================================
+                    GRADIENT BOOSTING MACHINES (GBM)
+================================================================================
+
+1. Base Predictor Initialization:
+   - For Regression (Squared Error Loss L(y, F) = (1/2) * (y - F)^2):
+         F_0(x) = (1 / N) * Σ_{i=1}^N y_i
+
+   - For Classification (Binary Log-Loss):
+         p_bar = (1 / N) * Σ_{i=1}^N y_i
+         F_0(x) = ln( p_bar / (1 - p_bar) )
+
+2. For each boosting round m = 1, ..., M:
+   a. Compute Pseudo-Residuals (Negative Gradient of Loss):
+          r_{im} = - [ ∂L(y_i, F(x_i)) / ∂F(x_i) ]_{F = F_{m-1}}
+          - Regression:      r_{im} = y_i - F_{m-1}(x_i)
+          - Classification:  r_{im} = y_i - σ(F_{m-1}(x_i)) = y_i - p_{m-1}(x_i)
+
+   b. Fit Weak Decision Tree / Stump h_m(x) to Residuals r_{im}:
+          Find feature and threshold θ minimizing sum of squared residual errors.
+
+   c. Leaf Output Values (Newton-Raphson Step γ):
+          - Regression:      γ_L = mean(r_L),  γ_R = mean(r_R)
+          - Classification:  γ_node = Σ r_i / ( Σ p_i * (1 - p_i) + ε )
+
+   d. Additive Model Update with Shrinkage (Learning Rate η):
+          F_m(x) = F_{m-1}(x) + η * h_m(x)
+
+3. Final Prediction:
+   - Regression:      y_hat = F_M(x)
+   - Classification:  p_hat = 1 / (1 + exp(-F_M(x)))
+================================================================================
+*/
+
+struct GBMStump {
+    feature: int;       // 0 for x1, 1 for x2
+    threshold: float;
+    gamma_left: float;  // Leaf output for x <= threshold
+    gamma_right: float; // Leaf output for x > threshold
+}
+
+fn sigmoid_gbm(z: float) -> float {
+    if (z < -20.0) { return 0.0; }
+    if (z > 20.0) { return 1.0; }
+    return 1.0 / (1.0 + exp(-z));
+}
+
+fn predict_gbm_stump(s: &GBMStump, x1_val: float, x2_val: float) -> float {
+    let val: float = x1_val;
+    if (s.feature == 1) { val = x2_val; }
+
+    if (val <= s.threshold) {
+        return s.gamma_left;
+    }
+    return s.gamma_right;
+}
+
+// -------------------------------------------------------------
+// 1. GRADIENT BOOSTED REGRESSION
+// -------------------------------------------------------------
+fn fit_regression_stump(x1: &float[], x2: &float[], res: &float[], n: int) -> GBMStump {
+    let best_feat: int = 0;
+    let best_thresh: float = 0.0;
+    let best_gl: float = 0.0;
+    let best_gr: float = 0.0;
+    let min_sse: float = 999999.0;
+
+    for (let f = 0; f < 2; f++) {
+        for (let i = 0; i < n; i++) {
+            let t: float = x1[i];
+            if (f == 1) { t = x2[i]; }
+
+            let sum_l: float = 0.0; let count_l: int = 0;
+            let sum_r: float = 0.0; let count_r: int = 0;
+
+            for (let j = 0; j < n; j++) {
+                let v: float = x1[j];
+                if (f == 1) { v = x2[j]; }
+
+                if (v <= t) {
+                    sum_l += res[j];
+                    count_l = count_l + 1;
+                } else {
+                    sum_r += res[j];
+                    count_r = count_r + 1;
+                }
+            }
+
+            if (count_l > 0 && count_r > 0) {
+                let gl: float = sum_l / (1.0 * count_l);
+                let gr: float = sum_r / (1.0 * count_r);
+
+                let sse: float = 0.0;
+                for (let j = 0; j < n; j++) {
+                    let v: float = x1[j];
+                    if (f == 1) { v = x2[j]; }
+
+                    let pred: float = gr;
+                    if (v <= t) { pred = gl; }
+
+                    let diff: float = res[j] - pred;
+                    sse += diff * diff;
+                }
+
+                if (sse < min_sse) {
+                    min_sse = sse;
+                    best_feat = f;
+                    best_thresh = t;
+                    best_gl = gl;
+                    best_gr = gr;
+                }
+            }
+        }
+    }
+
+    return GBMStump {
+        feature: best_feat,
+        threshold: best_thresh,
+        gamma_left: best_gl,
+        gamma_right: best_gr
+    };
+}
+
+fn train_gbm_regressor(x1: &float[], x2: &float[], y: &float[], n: int, num_rounds: int, lr: float, stumps: &GBMStump[], f0_out: &float[]) -> void {
+    let y_sum: float = 0.0;
+    for (let i = 0; i < n; i++) { y_sum += y[i]; }
+    let f0: float = y_sum / (1.0 * n);
+    f0_out[0] = f0;
+
+    let f_preds: float[] = alloc(float, n);
+    let residuals: float[] = alloc(float, n);
+    for (let i = 0; i < n; i++) { f_preds[i] = f0; }
+
+    for (let m = 0; m < num_rounds; m++) {
+        let cur_mse: float = 0.0;
+        for (let i = 0; i < n; i++) {
+            residuals[i] = y[i] - f_preds[i];
+            cur_mse += residuals[i] * residuals[i];
+        }
+        cur_mse = cur_mse / (1.0 * n);
+
+        let s: GBMStump = fit_regression_stump(x1, x2, &residuals, n);
+        stumps[m] = s;
+
+        for (let i = 0; i < n; i++) {
+            let step: float = predict_gbm_stump(&s, x1[i], x2[i]);
+            f_preds[i] = f_preds[i] + lr * step;
+        }
+
+        print(f"  Round #{m + 1}: Residual MSE = {cur_mse} | Fitted Split: Feature {s.feature} <= {s.threshold} (γL={s.gamma_left}, γR={s.gamma_right})");
+    }
+}
+
+fn predict_gbm_regression(f0: float, stumps: &GBMStump[], num_rounds: int, lr: float, x1_val: float, x2_val: float) -> float {
+    let y_pred: float = f0;
+    for (let m = 0; m < num_rounds; m++) {
+        y_pred += lr * predict_gbm_stump(&stumps[m], x1_val, x2_val);
+    }
+    return y_pred;
+}
+
+// -------------------------------------------------------------
+// 2. GRADIENT BOOSTED CLASSIFIER (Log-Loss Minimization)
+// -------------------------------------------------------------
+fn fit_classification_stump(x1: &float[], x2: &float[], res: &float[], probs: &float[], n: int) -> GBMStump {
+    let best_feat: int = 0;
+    let best_thresh: float = 0.0;
+    let min_sse: float = 999999.0;
+
+    // Stage 1: Find best split on pseudo-residuals
+    for (let f = 0; f < 2; f++) {
+        for (let i = 0; i < n; i++) {
+            let t: float = x1[i];
+            if (f == 1) { t = x2[i]; }
+
+            let sum_l: float = 0.0; let count_l: int = 0;
+            let sum_r: float = 0.0; let count_r: int = 0;
+
+            for (let j = 0; j < n; j++) {
+                let v: float = x1[j];
+                if (f == 1) { v = x2[j]; }
+
+                if (v <= t) {
+                    sum_l += res[j];
+                    count_l = count_l + 1;
+                } else {
+                    sum_r += res[j];
+                    count_r = count_r + 1;
+                }
+            }
+
+            if (count_l > 0 && count_r > 0) {
+                let mean_l: float = sum_l / (1.0 * count_l);
+                let mean_r: float = sum_r / (1.0 * count_r);
+
+                let sse: float = 0.0;
+                for (let j = 0; j < n; j++) {
+                    let v: float = x1[j];
+                    if (f == 1) { v = x2[j]; }
+
+                    let pred: float = mean_r;
+                    if (v <= t) { pred = mean_l; }
+
+                    let diff: float = res[j] - pred;
+                    sse += diff * diff;
+                }
+
+                if (sse < min_sse) {
+                    min_sse = sse;
+                    best_feat = f;
+                    best_thresh = t;
+                }
+            }
+        }
+    }
+
+    // Stage 2: Newton-Raphson update for leaf gammas on the chosen split
+    let num_l: float = 0.0; let den_l: float = 0.0;
+    let num_r: float = 0.0; let den_r: float = 0.0;
+    let eps: float = 0.0001;
+
+    for (let j = 0; j < n; j++) {
+        let v: float = x1[j];
+        if (best_feat == 1) { v = x2[j]; }
+
+        let p: float = probs[j];
+        let var_p: float = p * (1.0 - p);
+
+        if (v <= best_thresh) {
+            num_l += res[j];
+            den_l += var_p;
+        } else {
+            num_r += res[j];
+            den_r += var_p;
+        }
+    }
+
+    let gl: float = num_l / (den_l + eps);
+    let gr: float = num_r / (den_r + eps);
+
+    return GBMStump {
+        feature: best_feat,
+        threshold: best_thresh,
+        gamma_left: gl,
+        gamma_right: gr
+    };
+}
+
+fn train_gbm_classifier(x1: &float[], x2: &float[], y: &int[], n: int, num_rounds: int, lr: float, stumps: &GBMStump[], f0_out: &float[]) -> void {
+    let count1: int = 0;
+    for (let i = 0; i < n; i++) {
+        if (y[i] == 1) { count1 = count1 + 1; }
+    }
+    let p_bar: float = (1.0 * count1) / (1.0 * n);
+    let f0: float = log(p_bar / (1.0 - p_bar));
+    f0_out[0] = f0;
+
+    let f_preds: float[] = alloc(float, n);
+    let probs: float[] = alloc(float, n);
+    let residuals: float[] = alloc(float, n);
+
+    for (let i = 0; i < n; i++) {
+        f_preds[i] = f0;
+    }
+
+    for (let m = 0; m < num_rounds; m++) {
+        let log_loss: float = 0.0;
+        let eps: float = 0.00001;
+
+        for (let i = 0; i < n; i++) {
+            let p: float = sigmoid_gbm(f_preds[i]);
+            probs[i] = p;
+            residuals[i] = (1.0 * y[i]) - p;
+
+            if (p < eps) { p = eps; }
+            if (p > 1.0 - eps) { p = 1.0 - eps; }
+
+            let yi: float = 1.0 * y[i];
+            log_loss -= (yi * log(p) + (1.0 - yi) * log(1.0 - p));
+        }
+        log_loss = log_loss / (1.0 * n);
+
+        let s: GBMStump = fit_classification_stump(x1, x2, &residuals, &probs, n);
+        stumps[m] = s;
+
+        for (let i = 0; i < n; i++) {
+            let step: float = predict_gbm_stump(&s, x1[i], x2[i]);
+            f_preds[i] = f_preds[i] + lr * step;
+        }
+
+        print(f"  Round #{m + 1}: Binary Log-Loss = {log_loss} | Split: Feature {s.feature} <= {s.threshold} (γL={s.gamma_left}, γR={s.gamma_right})");
+    }
+}
+
+fn predict_gbm_class(f0: float, stumps: &GBMStump[], num_rounds: int, lr: float, x1_val: float, x2_val: float) -> int {
+    let f_val: float = f0;
+    for (let m = 0; m < num_rounds; m++) {
+        f_val += lr * predict_gbm_stump(&stumps[m], x1_val, x2_val);
+    }
+    let prob: float = sigmoid_gbm(f_val);
+    if (prob >= 0.5) { return 1; }
+    return 0;
+}
+
+fn main() -> int {
+    print("==================================================================");
+    print("   GRADIENT BOOSTING MACHINES (GBM) REGRESSION & CLASSIFICATION   ");
+    print("==================================================================\n");
+
+    // --- PART 1: GRADIENT BOOSTED REGRESSION ---
+    let n_reg: int = 6;
+    let rx1: float[] = alloc(float, n_reg);
+    let rx2: float[] = alloc(float, n_reg);
+    let ry: float[] = alloc(float, n_reg);
+
+    rx1[0] = 1.0; rx2[0] = 2.0; ry[0] = 10.0;
+    rx1[1] = 2.0; rx2[1] = 1.0; ry[1] = 12.0;
+    rx1[2] = 3.0; rx2[2] = 4.0; ry[2] = 25.0;
+    rx1[3] = 4.0; rx2[3] = 3.0; ry[3] = 28.0;
+    rx1[4] = 6.0; rx2[4] = 7.0; ry[4] = 50.0;
+    rx1[5] = 7.0; rx2[5] = 6.0; ry[5] = 55.0;
+
+    let rounds_reg: int = 4;
+    let reg_stumps: GBMStump[] = alloc(GBMStump, rounds_reg);
+    let f0_reg: float[] = alloc(float, 1);
+
+    print("--- 1. Training Gradient Boosted Regressor (Residual Descent) ---");
+    train_gbm_regressor(&rx1, &rx2, &ry, n_reg, rounds_reg, 0.6, &reg_stumps, &f0_reg);
+    print("");
+
+    let p_low: float = predict_gbm_regression(f0_reg[0], &reg_stumps, rounds_reg, 0.6, 1.5, 1.5);
+    let p_mid: float = predict_gbm_regression(f0_reg[0], &reg_stumps, rounds_reg, 0.6, 3.5, 3.5);
+    let p_high: float = predict_gbm_regression(f0_reg[0], &reg_stumps, rounds_reg, 0.6, 6.5, 6.5);
+
+    print(f"  Test Point (1.5, 1.5) -> GBM Regressed Value: {p_low} (Expected ~11.0)");
+    print(f"  Test Point (3.5, 3.5) -> GBM Regressed Value: {p_mid} (Expected ~26.5)");
+    print(f"  Test Point (6.5, 6.5) -> GBM Regressed Value: {p_high} (Expected ~52.5)\n");
+
+    // --- PART 2: GRADIENT BOOSTED CLASSIFIER (Log-Loss Minimization) ---
+    let n_cls: int = 6;
+    let cx1: float[] = alloc(float, n_cls);
+    let cx2: float[] = alloc(float, n_cls);
+    let cy: int[] = alloc(int, n_cls);
+
+    cx1[0] = 1.0; cx2[0] = 1.5; cy[0] = 0;
+    cx1[1] = 2.0; cx2[1] = 1.0; cy[1] = 0;
+    cx1[2] = 1.5; cx2[2] = 2.0; cy[2] = 0;
+
+    cx1[3] = 5.0; cx2[3] = 5.5; cy[3] = 1;
+    cx1[4] = 6.0; cx2[4] = 5.0; cy[4] = 1;
+    cx1[5] = 5.5; cx2[5] = 6.0; cy[5] = 1;
+
+    let rounds_cls: int = 3;
+    let cls_stumps: GBMStump[] = alloc(GBMStump, rounds_cls);
+    let f0_cls: float[] = alloc(float, 1);
+
+    print("--- 2. Training Gradient Boosted Classifier (Log-Loss Descent) ---");
+    train_gbm_classifier(&cx1, &cx2, &cy, n_cls, rounds_cls, 0.8, &cls_stumps, &f0_cls);
+    print("");
+
+    let c_pred0: int = predict_gbm_class(f0_cls[0], &cls_stumps, rounds_cls, 0.8, 1.2, 1.8);
+    let c_pred1: int = predict_gbm_class(f0_cls[0], &cls_stumps, rounds_cls, 0.8, 5.8, 5.2);
+
+    print(f"  Test Point (1.2, 1.8) -> Predicted Class: {c_pred0} (Expected: 0)");
+    print(f"  Test Point (5.8, 5.2) -> Predicted Class: {c_pred1} (Expected: 1)\n");
+
+    print("==================================================================");
+    print("Gradient Boosting Machines (Regression & Classification) 0 leaks!");
+    return 0;
+}
