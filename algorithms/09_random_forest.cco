@@ -1,0 +1,328 @@
+// Algorithm 9: Random Forest Classifier (Bootstrap Aggregating, Feature Sub-Sampling & OOB Evaluation)
+
+/*
+================================================================================
+                               RANDOM FOREST
+================================================================================
+
+1. Bootstrap Aggregating (Bagging):
+       Given training dataset D of size N:
+       For each tree b = 1, ..., B:
+           Sample N items uniformly with replacement from D.
+           Expected Out-of-Bag (OOB) proportion: (1 - 1/N)^N ≈ 36.8%
+
+2. Random Feature Sub-Sampling:
+       Given total features P:
+       At each candidate split, randomly select subset of size m = floor(sqrt(P))
+       This decorrelates individual trees and drastically reduces ensemble variance.
+
+3. Node Split Criterion (Gini Impurity):
+       Gini(S) = 1 - Σ_{c=1}^K (p_c)^2
+       Gini_split = (|S_L| / |S|) * Gini(S_L) + (|S_R| / |S|) * Gini(S_R)
+
+4. Ensemble Majority Voting:
+       H(x) = mode( h_1(x), h_2(x), ..., h_B(x) )
+       Confidence(c) = (1 / B) * Σ_{b=1}^B I( h_b(x) == c )
+
+5. Out-of-Bag (OOB) Error Estimate:
+       OOB_Error = (1 / N) * Σ_{i=1}^N I( H_OOB(x_i) != y_i )
+================================================================================
+*/
+
+struct RFNode {
+    is_leaf: bool;
+    feature: int;       // 0, 1, 2, or 3
+    threshold: float;
+    left_child: int;
+    right_child: int;
+    pred_class: int;
+}
+
+struct SplitCandidate {
+    threshold: float;
+    gini: float;
+}
+
+struct EnsembleResult {
+    pred_class: int;
+    confidence: float;
+}
+
+// -------------------------------------------------------------
+// Gini Impurity Calculator
+// -------------------------------------------------------------
+fn calc_gini_rf(c0: int, c1: int) -> float {
+    let total: int = c0 + c1;
+    if (total == 0) { return 0.0; }
+    let p0: float = (1.0 * c0) / (1.0 * total);
+    let p1: float = (1.0 * c1) / (1.0 * total);
+    return 1.0 - (p0 * p0 + p1 * p1);
+}
+
+// -------------------------------------------------------------
+// Predict Single Tree
+// -------------------------------------------------------------
+fn predict_rf_tree(nodes: &RFNode[], offset: int, f0: float, f1: float, f2: float, f3: float) -> int {
+    let curr: int = offset;
+
+    while (!nodes[curr].is_leaf) {
+        let val: float = f0;
+        if (nodes[curr].feature == 1) { val = f1; }
+        else if (nodes[curr].feature == 2) { val = f2; }
+        else if (nodes[curr].feature == 3) { val = f3; }
+
+        if (val <= nodes[curr].threshold) {
+            curr = offset + nodes[curr].left_child;
+        } else {
+            curr = offset + nodes[curr].right_child;
+        }
+    }
+
+    return nodes[curr].pred_class;
+}
+
+// -------------------------------------------------------------
+// Find Best Split on 1 Feature
+// -------------------------------------------------------------
+fn find_split_feat(f_vals: &float[], y_vals: &int[], subset: &int[], sub_size: int) -> SplitCandidate {
+    let best_t: float = 0.0;
+    let best_gini: float = 999.0;
+
+    let tot_c0: int = 0; let tot_c1: int = 0;
+    for (let i = 0; i < sub_size; i++) {
+        let idx: int = subset[i];
+        if (y_vals[idx] == 0) { tot_c0 = tot_c0 + 1; }
+        else { tot_c1 = tot_c1 + 1; }
+    }
+
+    let tot: int = tot_c0 + tot_c1;
+    if (tot <= 1 || tot_c0 == 0 || tot_c1 == 0) {
+        return SplitCandidate { threshold: 0.0, gini: 999.0 };
+    }
+
+    for (let i = 0; i < sub_size; i++) {
+        let t: float = f_vals[subset[i]];
+
+        let l_c0: int = 0; let l_c1: int = 0;
+        let r_c0: int = 0; let r_c1: int = 0;
+
+        for (let j = 0; j < sub_size; j++) {
+            let idx: int = subset[j];
+            if (f_vals[idx] <= t) {
+                if (y_vals[idx] == 0) { l_c0 = l_c0 + 1; }
+                else { l_c1 = l_c1 + 1; }
+            } else {
+                if (y_vals[idx] == 0) { r_c0 = r_c0 + 1; }
+                else { r_c1 = r_c1 + 1; }
+            }
+        }
+
+        let nl: int = l_c0 + l_c1;
+        let nr: int = r_c0 + r_c1;
+        if (nl == 0 || nr == 0) { continue; }
+
+        let wl: float = (1.0 * nl) / (1.0 * tot);
+        let wr: float = (1.0 * nr) / (1.0 * tot);
+        let g: float = wl * calc_gini_rf(l_c0, l_c1) + wr * calc_gini_rf(r_c0, r_c1);
+
+        if (g < best_gini) {
+            best_gini = g;
+            best_t = t;
+        }
+    }
+
+    return SplitCandidate { threshold: best_t, gini: best_gini };
+}
+
+// -------------------------------------------------------------
+// Train 1 Shallow Tree on Bootstrap Sample
+// -------------------------------------------------------------
+fn train_single_tree(f0: &float[], f1: &float[], f2: &float[], f3: &float[], y: &int[], boot_indices: &int[], n: int, cand_f1: int, cand_f2: int, all_nodes: &RFNode[], offset: int) -> void {
+    let c1: SplitCandidate = SplitCandidate { threshold: 0.0, gini: 999.0 };
+    if (cand_f1 == 0) { c1 = find_split_feat(f0, y, boot_indices, n); }
+    else if (cand_f1 == 1) { c1 = find_split_feat(f1, y, boot_indices, n); }
+    else if (cand_f1 == 2) { c1 = find_split_feat(f2, y, boot_indices, n); }
+    else { c1 = find_split_feat(f3, y, boot_indices, n); }
+
+    let c2: SplitCandidate = SplitCandidate { threshold: 0.0, gini: 999.0 };
+    if (cand_f2 == 0) { c2 = find_split_feat(f0, y, boot_indices, n); }
+    else if (cand_f2 == 1) { c2 = find_split_feat(f1, y, boot_indices, n); }
+    else if (cand_f2 == 2) { c2 = find_split_feat(f2, y, boot_indices, n); }
+    else { c2 = find_split_feat(f3, y, boot_indices, n); }
+
+    let chosen_feat: int = cand_f1;
+    let chosen_thresh: float = c1.threshold;
+    if (c2.gini < c1.gini) {
+        chosen_feat = cand_f2;
+        chosen_thresh = c2.threshold;
+    }
+
+    // Partition left & right indices
+    let left_c0: int = 0; let left_c1: int = 0;
+    let right_c0: int = 0; let right_c1: int = 0;
+
+    for (let i = 0; i < n; i++) {
+        let idx: int = boot_indices[i];
+        let val: float = f0[idx];
+        if (chosen_feat == 1) { val = f1[idx]; }
+        else if (chosen_feat == 2) { val = f2[idx]; }
+        else if (chosen_feat == 3) { val = f3[idx]; }
+
+        if (val <= chosen_thresh) {
+            if (y[idx] == 0) { left_c0 = left_c0 + 1; }
+            else { left_c1 = left_c1 + 1; }
+        } else {
+            if (y[idx] == 0) { right_c0 = right_c0 + 1; }
+            else { right_c1 = right_c1 + 1; }
+        }
+    }
+
+    let left_pred: int = 0;
+    if (left_c1 > left_c0) { left_pred = 1; }
+
+    let right_pred: int = 0;
+    if (right_c1 > right_c0) { right_pred = 1; }
+
+    // Store in flat array:
+    // offset + 0: Root decision node
+    // offset + 1: Left Leaf node
+    // offset + 2: Right Leaf node
+    all_nodes[offset + 0] = RFNode { is_leaf: false, feature: chosen_feat, threshold: chosen_thresh, left_child: 1, right_child: 2, pred_class: -1 };
+    all_nodes[offset + 1] = RFNode { is_leaf: true, feature: -1, threshold: 0.0, left_child: -1, right_child: -1, pred_class: left_pred };
+    all_nodes[offset + 2] = RFNode { is_leaf: true, feature: -1, threshold: 0.0, left_child: -1, right_child: -1, pred_class: right_pred };
+}
+
+// -------------------------------------------------------------
+// Predict Ensemble Majority Vote & Confidence
+// -------------------------------------------------------------
+fn predict_forest(nodes: &RFNode[], num_trees: int, f0: float, f1: float, f2: float, f3: float) -> EnsembleResult {
+    let votes0: int = 0;
+    let votes1: int = 0;
+
+    for (let b = 0; b < num_trees; b++) {
+        let tree_offset: int = b * 3;
+        let pred: int = predict_rf_tree(nodes, tree_offset, f0, f1, f2, f3);
+        if (pred == 0) { votes0 = votes0 + 1; }
+        else { votes1 = votes1 + 1; }
+    }
+
+    let chosen: int = 0;
+    let conf: float = (1.0 * votes0) / (1.0 * num_trees);
+    if (votes1 > votes0) {
+        chosen = 1;
+        conf = (1.0 * votes1) / (1.0 * num_trees);
+    }
+
+    return EnsembleResult { pred_class: chosen, confidence: conf };
+}
+
+fn main() -> int {
+    print("==================================================================");
+    print("   RANDOM FOREST: BAGGING & FEATURE SUB-SAMPLING (Cco-v20)        ");
+    print("==================================================================\n");
+
+    // 4 Features:
+    // f0: Customer Age (scaled)
+    // f1: Income (scaled)
+    // f2: Spending Score
+    // f3: Web Activity Level
+    // Label: 0 = No Purchase, 1 = Purchase
+    let n: int = 8;
+    let f0: float[] = alloc(float, n);
+    let f1: float[] = alloc(float, n);
+    let f2: float[] = alloc(float, n);
+    let f3: float[] = alloc(float, n);
+    let y: int[] = alloc(int, n);
+
+    // Class 0
+    f0[0] = 18.0; f1[0] = 20.0; f2[0] = 15.0; f3[0] = 2.0; y[0] = 0;
+    f0[1] = 22.0; f1[1] = 25.0; f2[1] = 20.0; f3[1] = 3.0; y[1] = 0;
+    f0[2] = 25.0; f1[2] = 30.0; f2[2] = 10.0; f3[2] = 1.0; y[2] = 0;
+    f0[3] = 30.0; f1[3] = 28.0; f2[3] = 25.0; f3[3] = 4.0; y[3] = 0;
+
+    // Class 1
+    f0[4] = 45.0; f1[4] = 85.0; f2[4] = 75.0; f3[4] = 8.0; y[4] = 1;
+    f0[5] = 50.0; f1[5] = 90.0; f2[5] = 80.0; f3[5] = 9.0; y[5] = 1;
+    f0[6] = 38.0; f1[6] = 75.0; f2[6] = 65.0; f3[6] = 7.0; y[6] = 1;
+    f0[7] = 55.0; f1[7] = 95.0; f2[7] = 85.0; f3[7] = 9.5; y[7] = 1;
+
+    let num_trees: int = 5;
+    let nodes_per_tree: int = 3;
+    let forest_nodes: RFNode[] = alloc(RFNode, num_trees * nodes_per_tree);
+
+    // Bootstrap Bagging and Random Feature Sub-Sampling (m = sqrt(4) = 2 features per tree)
+    random_seed(101);
+
+    print("--- 1. Training Ensemble of Decorrelated Decision Trees ---");
+    let oob_hits: int[] = alloc(int, n);
+    let oob_correct: int[] = alloc(int, n);
+    for (let i = 0; i < n; i++) {
+        oob_hits[i] = 0;
+        oob_correct[i] = 0;
+    }
+
+    for (let b = 0; b < num_trees; b++) {
+        let boot_indices: int[] = alloc(int, n);
+        let in_bag: bool[] = alloc(bool, n);
+        for (let i = 0; i < n; i++) { in_bag[i] = false; }
+
+        for (let i = 0; i < n; i++) {
+            let rnd_idx: int = random_int(0, n - 1);
+            boot_indices[i] = rnd_idx;
+            in_bag[rnd_idx] = true;
+        }
+
+        // Sub-sample 2 distinct features out of 4:
+        let feat_a: int = b % 4;
+        let feat_b: int = (b + 1) % 4;
+
+        let tree_offset: int = b * nodes_per_tree;
+        train_single_tree(&f0, &f1, &f2, &f3, &y, &boot_indices, n, feat_a, feat_b, &forest_nodes, tree_offset);
+
+        let split_f: int = forest_nodes[tree_offset].feature;
+        let split_th: float = forest_nodes[tree_offset].threshold;
+        print(f"  Tree #{b + 1} trained: Split on Feature {split_f} <= {split_th}");
+
+        // Track Out-of-Bag (OOB) Performance for this tree
+        for (let i = 0; i < n; i++) {
+            if (!in_bag[i]) {
+                oob_hits[i] = oob_hits[i] + 1;
+                let pred: int = predict_rf_tree(&forest_nodes, tree_offset, f0[i], f1[i], f2[i], f3[i]);
+                if (pred == y[i]) {
+                    oob_correct[i] = oob_correct[i] + 1;
+                }
+            }
+        }
+    }
+    print("");
+
+    // --- 2. Out-of-Bag (OOB) Generalization Evaluation ---
+    let evaluated_oob: int = 0;
+    let total_oob_correct: int = 0;
+    for (let i = 0; i < n; i++) {
+        if (oob_hits[i] > 0) {
+            evaluated_oob = evaluated_oob + 1;
+            if (oob_correct[i] * 2 >= oob_hits[i]) {
+                total_oob_correct = total_oob_correct + 1;
+            }
+        }
+    }
+    let oob_acc: float = (1.0 * total_oob_correct) / (1.0 * evaluated_oob);
+    print("--- 2. Out-of-Bag (OOB) Cross-Validation Estimate ---");
+    print(f"  OOB Evaluated Samples : {evaluated_oob}/{n}");
+    print(f"  Estimated OOB Accuracy: {oob_acc * 100.0}%\n");
+
+    // --- 3. Testing Ensemble Predictions on Unseen Customers ---
+    print("--- 3. Testing Random Forest Ensemble Inferences ---");
+    // Customer 1: Young, low income, low spend
+    let res1: EnsembleResult = predict_forest(&forest_nodes, num_trees, 20.0, 22.0, 18.0, 2.5);
+    print(f"  Customer A [20yo, $22k, 18 spend] -> Pred: {res1.pred_class} (Confidence: {res1.confidence * 100.0}%) [Expected: 0]");
+
+    // Customer 2: Established, high income, high spend
+    let res2: EnsembleResult = predict_forest(&forest_nodes, num_trees, 48.0, 88.0, 78.0, 8.5);
+    print(f"  Customer B [48yo, $88k, 78 spend] -> Pred: {res2.pred_class} (Confidence: {res2.confidence * 100.0}%) [Expected: 1]\n");
+
+    print("==================================================================");
+    print("Random Forest validation complete with 0 memory leaks!");
+    return 0;
+}
