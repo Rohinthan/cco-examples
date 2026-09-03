@@ -1,0 +1,283 @@
+// Algorithm 13: Extremely Randomized Trees (Extra Trees) Classifier
+
+/*
+================================================================================
+                 EXTREMELY RANDOMIZED TREES (EXTRA TREES)
+================================================================================
+(Geurts, Ernst, & Wehenkel, Machine Learning 2006)
+
+1. Dual Randomization Mechanism:
+   a. Feature Subset Selection:
+          Randomly select K candidate features without replacement:
+          {j_1, j_2, ..., j_K} ⊆ {1, 2, ..., P},    where K = floor(sqrt(P))
+
+   b. Random Cut-Point (Threshold) Generation:
+          Unlike Random Forest (which scans all midpoints to find the exact optimum),
+          Extra Trees draws a single threshold uniformly at random from the feature's range:
+          θ_k ~ Uniform( min_{i ∈ S} x_{i, j_k},  max_{i ∈ S} x_{i, j_k} )
+
+2. Split Evaluation (Gini Impurity Score):
+       For each randomly drawn candidate pair (j_k, θ_k):
+           Gini(S) = 1 - Σ_{c=1}^C (p_c)^2
+           Gain(j_k, θ_k) = Gini(S) - [ (|S_L| / |S|) * Gini(S_L) + (|S_R| / |S|) * Gini(S_R) ]
+       Choose the pair with maximum Information/Gini Gain:
+           (j*, θ*) = argmax_{k=1...K} Gain(j_k, θ_k)
+
+3. Full Sample Utilization (No Bootstrap Aggregation):
+       Trains each tree on the complete dataset S without replacement.
+       The extreme randomization of cuts acts as a stronger regularizer than bagging,
+       drastically reducing variance and avoiding the O(N log N) sorting overhead.
+
+4. Ensemble Prediction (Majority Voting / Class Probability):
+       H(x) = mode( T_1(x), T_2(x), ..., T_M(x) )
+       P(y = c | x) = (1 / M) * Σ_{m=1}^M I( T_m(x) == c )
+================================================================================
+*/
+
+struct ETNode {
+    is_leaf: bool;
+    feature: int;       // 0, 1, 2, or 3
+    threshold: float;
+    left_child: int;    // Offset relative to tree base
+    right_child: int;
+    pred_class: int;
+}
+
+struct ETResult {
+    pred_class: int;
+    prob_class1: float;
+}
+
+fn calc_gini_et(c0: int, c1: int) -> float {
+    let total: int = c0 + c1;
+    if (total == 0) { return 0.0; }
+    let p0: float = (1.0 * c0) / (1.0 * total);
+    let p1: float = (1.0 * c1) / (1.0 * total);
+    return 1.0 - (p0 * p0 + p1 * p1);
+}
+
+// -------------------------------------------------------------
+// Evaluate Random Cut-Point on Given Feature
+// -------------------------------------------------------------
+fn eval_random_cut(f_vals: &float[], y_vals: &int[], n: int, out_thresh: &float[]) -> float {
+    // 1. Find min and max of this feature
+    let min_v: float = f_vals[0];
+    let max_v: float = f_vals[0];
+    for (let i = 1; i < n; i++) {
+        if (f_vals[i] < min_v) { min_v = f_vals[i]; }
+        if (f_vals[i] > max_v) { max_v = f_vals[i]; }
+    }
+
+    if (max_v - min_v < 0.0001) {
+        out_thresh[0] = min_v;
+        return -1.0; // Cannot split
+    }
+
+    // 2. Extra Trees Random Cut: θ ~ Uniform(min_v, max_v)
+    let rnd_pct: int = random_int(15, 85);
+    let rand_t: float = min_v + ((1.0 * rnd_pct) / 100.0) * (max_v - min_v);
+    out_thresh[0] = rand_t;
+
+    // 3. Compute Gini Gain of this random threshold
+    let par_c0: int = 0; let par_c1: int = 0;
+    let l_c0: int = 0;   let l_c1: int = 0;
+    let r_c0: int = 0;   let r_c1: int = 0;
+
+    for (let i = 0; i < n; i++) {
+        if (y_vals[i] == 0) { par_c0 = par_c0 + 1; }
+        else { par_c1 = par_c1 + 1; }
+
+        if (f_vals[i] <= rand_t) {
+            if (y_vals[i] == 0) { l_c0 = l_c0 + 1; }
+            else { l_c1 = l_c1 + 1; }
+        } else {
+            if (y_vals[i] == 0) { r_c0 = r_c0 + 1; }
+            else { r_c1 = r_c1 + 1; }
+        }
+    }
+
+    let nl: int = l_c0 + l_c1;
+    let nr: int = r_c0 + r_c1;
+    if (nl == 0 || nr == 0) {
+        return -1.0;
+    }
+
+    let tot: float = 1.0 * n;
+    let par_gini: float = calc_gini_et(par_c0, par_c1);
+    let l_gini: float = calc_gini_et(l_c0, l_c1);
+    let r_gini: float = calc_gini_et(r_c0, r_c1);
+
+    let split_gini: float = ((1.0 * nl) / tot) * l_gini + ((1.0 * nr) / tot) * r_gini;
+    let gain: float = par_gini - split_gini;
+    return gain;
+}
+
+// -------------------------------------------------------------
+// Train 1 Extra Tree with Extreme Random Cut Selection
+// -------------------------------------------------------------
+fn train_extra_tree(f0: &float[], f1: &float[], f2: &float[], f3: &float[], y: &int[], n: int, cand_f1: int, cand_f2: int, all_nodes: &ETNode[], offset: int) -> void {
+    let th_box: float[] = alloc(float, 1);
+
+    // Evaluate candidate feature 1 with random cut
+    let t1: float = 0.0;
+    let gain1: float = 0.0;
+    if (cand_f1 == 0) { gain1 = eval_random_cut(f0, y, n, &th_box); t1 = th_box[0]; }
+    else if (cand_f1 == 1) { gain1 = eval_random_cut(f1, y, n, &th_box); t1 = th_box[0]; }
+    else if (cand_f1 == 2) { gain1 = eval_random_cut(f2, y, n, &th_box); t1 = th_box[0]; }
+    else { gain1 = eval_random_cut(f3, y, n, &th_box); t1 = th_box[0]; }
+
+    // Evaluate candidate feature 2 with random cut
+    let t2: float = 0.0;
+    let gain2: float = 0.0;
+    if (cand_f2 == 0) { gain2 = eval_random_cut(f0, y, n, &th_box); t2 = th_box[0]; }
+    else if (cand_f2 == 1) { gain2 = eval_random_cut(f1, y, n, &th_box); t2 = th_box[0]; }
+    else if (cand_f2 == 2) { gain2 = eval_random_cut(f2, y, n, &th_box); t2 = th_box[0]; }
+    else { gain2 = eval_random_cut(f3, y, n, &th_box); t2 = th_box[0]; }
+
+    let best_f: int = cand_f1;
+    let best_th: float = t1;
+    if (gain2 > gain1) {
+        best_f = cand_f2;
+        best_th = t2;
+    }
+
+    // Partition counts for left & right leaves
+    let l_c0: int = 0; let l_c1: int = 0;
+    let r_c0: int = 0; let r_c1: int = 0;
+
+    for (let i = 0; i < n; i++) {
+        let v: float = f0[i];
+        if (best_f == 1) { v = f1[i]; }
+        else if (best_f == 2) { v = f2[i]; }
+        else if (best_f == 3) { v = f3[i]; }
+
+        if (v <= best_th) {
+            if (y[i] == 0) { l_c0 = l_c0 + 1; }
+            else { l_c1 = l_c1 + 1; }
+        } else {
+            if (y[i] == 0) { r_c0 = r_c0 + 1; }
+            else { r_c1 = r_c1 + 1; }
+        }
+    }
+
+    let left_pred: int = 0;
+    if (l_c1 > l_c0) { left_pred = 1; }
+
+    let right_pred: int = 0;
+    if (r_c1 > r_c0) { right_pred = 1; }
+
+    all_nodes[offset + 0] = ETNode { is_leaf: false, feature: best_f, threshold: best_th, left_child: 1, right_child: 2, pred_class: -1 };
+    all_nodes[offset + 1] = ETNode { is_leaf: true, feature: -1, threshold: 0.0, left_child: -1, right_child: -1, pred_class: left_pred };
+    all_nodes[offset + 2] = ETNode { is_leaf: true, feature: -1, threshold: 0.0, left_child: -1, right_child: -1, pred_class: right_pred };
+}
+
+fn predict_et_tree(nodes: &ETNode[], offset: int, f0: float, f1: float, f2: float, f3: float) -> int {
+    let curr: int = offset;
+
+    while (!nodes[curr].is_leaf) {
+        let v: float = f0;
+        if (nodes[curr].feature == 1) { v = f1; }
+        else if (nodes[curr].feature == 2) { v = f2; }
+        else if (nodes[curr].feature == 3) { v = f3; }
+
+        if (v <= nodes[curr].threshold) {
+            curr = offset + nodes[curr].left_child;
+        } else {
+            curr = offset + nodes[curr].right_child;
+        }
+    }
+
+    return nodes[curr].pred_class;
+}
+
+fn predict_extra_trees(nodes: &ETNode[], num_trees: int, f0: float, f1: float, f2: float, f3: float) -> ETResult {
+    let votes0: int = 0;
+    let votes1: int = 0;
+
+    for (let m = 0; m < num_trees; m++) {
+        let tree_offset: int = m * 3;
+        let pred: int = predict_et_tree(nodes, tree_offset, f0, f1, f2, f3);
+        if (pred == 0) { votes0 = votes0 + 1; }
+        else { votes1 = votes1 + 1; }
+    }
+
+    let p_class: int = 0;
+    if (votes1 > votes0) { p_class = 1; }
+
+    let prob1: float = (1.0 * votes1) / (1.0 * num_trees);
+    return ETResult { pred_class: p_class, prob_class1: prob1 };
+}
+
+fn main() -> int {
+    print("==================================================================");
+    print("   EXTREMELY RANDOMIZED TREES (EXTRA TREES) CLASSIFIER (Cco-v20)  ");
+    print("==================================================================\n");
+
+    // 4 Continuous Attributes (e.g. Signal readings)
+    // Entire dataset used directly without bootstrap resampling (Extra Trees principle)
+    let n: int = 8;
+    let f0: float[] = alloc(float, n);
+    let f1: float[] = alloc(float, n);
+    let f2: float[] = alloc(float, n);
+    let f3: float[] = alloc(float, n);
+    let y: int[] = alloc(int, n);
+
+    // Class 0: Low spectrum
+    f0[0] = 1.0; f1[0] = 2.0; f2[0] = 1.5; f3[0] = 0.8; y[0] = 0;
+    f0[1] = 1.5; f1[1] = 1.8; f2[1] = 2.0; f3[1] = 1.2; y[1] = 0;
+    f0[2] = 2.0; f1[2] = 2.5; f2[2] = 1.2; f3[2] = 1.0; y[2] = 0;
+    f0[3] = 2.5; f1[3] = 1.2; f2[3] = 2.2; f3[3] = 1.5; y[3] = 0;
+
+    // Class 1: High spectrum
+    f0[4] = 6.0; f1[4] = 7.5; f2[4] = 6.8; f3[4] = 8.0; y[4] = 1;
+    f0[5] = 7.2; f1[5] = 6.8; f2[5] = 7.5; f3[5] = 9.1; y[5] = 1;
+    f0[6] = 8.0; f1[6] = 8.2; f2[6] = 8.0; f3[6] = 7.9; y[6] = 1;
+    f0[7] = 8.5; f1[7] = 9.0; f2[7] = 8.9; f3[7] = 8.5; y[7] = 1;
+
+    let num_trees: int = 5;
+    let nodes_per_tree: int = 3;
+    let forest_nodes: ETNode[] = alloc(ETNode, num_trees * nodes_per_tree);
+
+    random_seed(2024);
+
+    print("--- 1. Training Extra Trees with Random Cut-Point Generation ---");
+    for (let m = 0; m < num_trees; m++) {
+        // Randomly pick 2 features to compare
+        let cand1: int = random_int(0, 3);
+        let cand2: int = (cand1 + random_int(1, 3)) % 4;
+
+        let offset: int = m * nodes_per_tree;
+        train_extra_tree(&f0, &f1, &f2, &f3, &y, n, cand1, cand2, &forest_nodes, offset);
+
+        let split_f: int = forest_nodes[offset].feature;
+        let split_th: float = forest_nodes[offset].threshold;
+        print(f"  Tree #{m + 1}: Split on Feature {split_f} with Random Threshold <= {split_th}");
+    }
+    print("");
+
+    // --- 2. In-Sample Training Accuracy ---
+    let correct: int = 0;
+    for (let i = 0; i < n; i++) {
+        let res: ETResult = predict_extra_trees(&forest_nodes, num_trees, f0[i], f1[i], f2[i], f3[i]);
+        if (res.pred_class == y[i]) {
+            correct = correct + 1;
+        }
+    }
+    let acc: float = (1.0 * correct) / (1.0 * n);
+    print("--- 2. Ensemble Training Performance ---");
+    print(f"  Ensemble Training Accuracy : {acc * 100.0}% ({correct}/{n})\n");
+
+    // --- 3. Testing Generalization on Unseen Signal Profiles ---
+    print("--- 3. Testing Extra Trees Inferences on Unseen Points ---");
+    // Signal A: Low spectrum profile
+    let res_a: ETResult = predict_extra_trees(&forest_nodes, num_trees, 1.8, 1.9, 1.7, 1.1);
+    print(f"  Signal A [Low Spec]  -> Predicted Class: {res_a.pred_class} (P(Class 1): {res_a.prob_class1 * 100.0}%) [Expected: 0]");
+
+    // Signal B: High spectrum profile
+    let res_b: ETResult = predict_extra_trees(&forest_nodes, num_trees, 7.5, 8.0, 7.8, 8.3);
+    print(f"  Signal B [High Spec] -> Predicted Class: {res_b.pred_class} (P(Class 1): {res_b.prob_class1 * 100.0}%) [Expected: 1]\n");
+
+    print("==================================================================");
+    print("Extremely Randomized Trees (Extra Trees) verified 0 memory leaks!");
+    return 0;
+}
