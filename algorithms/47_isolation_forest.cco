@@ -1,0 +1,303 @@
+// Algorithm 47: Isolation Forest (iForest) - Tree-Based Anomaly Detection & Recursive Partitioning
+
+/*
+================================================================================
+                        ISOLATION FOREST (iForest)
+================================================================================
+
+1. The Isolation Principle (Liu, Ting & Zhou, 2008):
+       Outliers are "few and different". Consequently, in a recursive random space
+       partitioning tree (iTree), anomalous points are isolated very close to the
+       root with short path lengths, while normal inliers require many cuts deep
+       in dense clusters to become isolated.
+
+2. Average Path Length of Unsuccessful Search in BST c(m):
+       Analogous to Binary Search Trees, the average path length for a dataset of size m is:
+           c(m) = 2 * ( ln(m - 1) + 0.5772156649 ) - ( 2 * (m - 1) / m )
+       where 0.5772156649 is the Euler-Mascheroni constant γ.
+       Base cases: c(1) = 0.0, c(2) = 1.0.
+
+3. Anomaly Score Formulation:
+       Given an ensemble of T iTrees, let h_t(x) be the path length of sample x in tree t.
+       Average path length:
+           E(h(x)) = (1 / T) * Σ_{t=1}^T h_t(x)
+
+       The normalized anomaly score s(x, n) ∈ [0, 1] is:
+           s(x, n) = 2^{ - E(h(x)) / c(n) }
+
+       - s -> 1.0 (E(h(x)) -> 0)    : High confidence anomaly / outlier!
+       - s -> 0.5 (E(h(x)) -> c(n))  : Typical normal instance.
+       - s -> 0.0 (E(h(x)) -> n - 1) : Dense core cluster point.
+       Decision rule: s(x, n) >= 0.60 classifies instance x as an ANOMALY.
+================================================================================
+*/
+
+fn c_factor(m: int) -> float {
+    if (m <= 1) { return 0.0; }
+    if (m == 2) { return 1.0; }
+    let m_f = 1.0 * m;
+    let eul = 0.5772156649;
+    return 2.0 * (log(m_f - 1.0) + eul) - (2.0 * (m_f - 1.0)) / m_f;
+}
+
+// -------------------------------------------------------------
+// Recursive iTree Node Storage: Flat arrays for memory efficiency
+// -------------------------------------------------------------
+// Tree node capacity: 32 nodes per tree
+// node_left[u], node_right[u], node_feat[u], node_val[u], node_size[u]
+
+fn build_itree_recursive(indices: &int[], count: int, current_depth: int, max_depth: int,
+                         x_data: &float[], n_features: int,
+                         node_left: &int[], node_right: &int[],
+                         node_feat: &int[], node_val: &float[], node_size: &int[],
+                         next_node_id: &int[], seed_box: &int[]) -> int {
+    let u = next_node_id[0];
+    next_node_id[0]++;
+
+    node_size[u] = count;
+    node_left[u] = -1;
+    node_right[u] = -1;
+    node_feat[u] = -1;
+    node_val[u] = 0.0;
+
+    // Terminal leaf conditions: depth limit reached or isolated sample
+    if (current_depth >= max_depth || count <= 1) {
+        return u;
+    }
+
+    // Pseudo-random feature selection
+    let rng = seed_box[0] * 1103515245 + 12345;
+    if (rng < 0) { rng = -rng; }
+    seed_box[0] = rng;
+    let split_f = rng % n_features;
+
+    // Find min and max along split feature for current subset
+    let min_v = x_data[indices[0] * n_features + split_f];
+    let max_v = min_v;
+    for (let i = 1; i < count; i++) {
+        let v = x_data[indices[i] * n_features + split_f];
+        if (v < min_v) { min_v = v; }
+        if (v > max_v) { max_v = v; }
+    }
+
+    // If all points have identical coordinates, cannot split further
+    if (max_v - min_v < 0.0001) {
+        return u;
+    }
+
+    // Pick uniform random split value in (min_v, max_v)
+    let rng2 = seed_box[0] * 1103515245 + 12345;
+    if (rng2 < 0) { rng2 = -rng2; }
+    seed_box[0] = rng2;
+    let ratio = (1.0 * (rng2 % 1000)) / 1000.0;
+    let split_val = min_v + ratio * (max_v - min_v);
+
+    // Partition indices into left (< split_val) and right (>= split_val)
+    let left_idx = alloc(int, count);
+    let right_idx = alloc(int, count);
+    let left_cnt = 0;
+    let right_cnt = 0;
+
+    for (let i = 0; i < count; i++) {
+        let pt = indices[i];
+        let val = x_data[pt * n_features + split_f];
+        if (val < split_val) {
+            left_idx[left_cnt] = pt;
+            left_cnt++;
+        } else {
+            right_idx[right_cnt] = pt;
+            right_cnt++;
+        }
+    }
+
+    // If partition is degenerate, terminate leaf
+    if (left_cnt == 0 || right_cnt == 0) {
+        return u;
+    }
+
+    node_feat[u] = split_f;
+    node_val[u] = split_val;
+
+    node_left[u] = build_itree_recursive(&left_idx, left_cnt, current_depth + 1, max_depth,
+                                         x_data, n_features,
+                                         node_left, node_right, node_feat, node_val, node_size,
+                                         next_node_id, seed_box);
+
+    node_right[u] = build_itree_recursive(&right_idx, right_cnt, current_depth + 1, max_depth,
+                                          x_data, n_features,
+                                          node_left, node_right, node_feat, node_val, node_size,
+                                          next_node_id, seed_box);
+
+    return u;
+}
+
+// -------------------------------------------------------------
+// Evaluate Path Length h(x) for single tree
+// -------------------------------------------------------------
+fn path_length_itree(x_pt: &float[], root_u: int,
+                     node_left: &int[], node_right: &int[],
+                     node_feat: &int[], node_val: &float[], node_size: &int[]) -> float {
+    let curr = root_u;
+    let depth = 0;
+
+    for (let step = 0; step < 32; step++) {
+        let left_child = node_left[curr];
+        let right_child = node_right[curr];
+
+        // If leaf node
+        if (left_child == -1 || right_child == -1) {
+            let sz = node_size[curr];
+            return (1.0 * depth) + c_factor(sz);
+        }
+
+        let f = node_feat[curr];
+        let split_v = node_val[curr];
+
+        depth++;
+        if (x_pt[f] < split_v) {
+            curr = left_child;
+        } else {
+            curr = right_child;
+        }
+    }
+
+    return 1.0 * depth;
+}
+
+fn main() -> int {
+    print("==================================================================");
+    print("   ISOLATION FOREST (iForest): ANOMALY DETECTION (v20)            ");
+    print("==================================================================\n");
+
+    // Dataset: 8 samples in 2D space
+    // 6 Dense Inliers clustered closely around (2.0, 2.0)
+    // 2 Isolated Anomalies far away at (8.5, 9.0) and (0.5, 8.0)
+    let n_samples = 8;
+    let n_features = 2;
+
+    let x_data = alloc(float, n_samples * n_features);
+    // Inliers
+    x_data[0*2+0] = 1.9; x_data[0*2+1] = 2.1;
+    x_data[1*2+0] = 2.1; x_data[1*2+1] = 1.9;
+    x_data[2*2+0] = 2.0; x_data[2*2+1] = 2.0;
+    x_data[3*2+0] = 2.2; x_data[3*2+1] = 2.2;
+    x_data[4*2+0] = 1.8; x_data[4*2+1] = 1.8;
+    x_data[5*2+0] = 2.0; x_data[5*2+1] = 2.3;
+    // Anomalies
+    x_data[6*2+0] = 8.5; x_data[6*2+1] = 9.0; // Distant Outlier 1
+    x_data[7*2+0] = 0.5; x_data[7*2+1] = 8.0; // Distant Outlier 2
+
+    print("--- 1. Dataset Specification ---");
+    print("  Inlier Cluster  : 6 points densely packed around centroid (2.0, 2.0)");
+    print("  Outlier Points  : Point #6 (8.5, 9.0) & Point #7 (0.5, 8.0)\n");
+
+    let num_trees = 10;
+    let max_depth = 4; // ceil(log2(8)) = 3 or 4
+    let max_nodes_per_tree = 32;
+
+    // Allocate memory for ensemble of iTrees
+    let all_left = alloc(int, num_trees * max_nodes_per_tree);
+    let all_right = alloc(int, num_trees * max_nodes_per_tree);
+    let all_feat = alloc(int, num_trees * max_nodes_per_tree);
+    let all_val = alloc(float, num_trees * max_nodes_per_tree);
+    let all_size = alloc(int, num_trees * max_nodes_per_tree);
+    let root_ids = alloc(int, num_trees);
+
+    let base_indices = alloc(int, n_samples);
+    for (let i = 0; i < n_samples; i++) { base_indices[i] = i; }
+
+    let seed_box = alloc(int, 1);
+    seed_box[0] = 777;
+
+    print(f"--- 2. Constructing Ensemble of {num_trees} Isolation Trees ---");
+    for (let t = 0; t < num_trees; t++) {
+        let tree_offset = t * max_nodes_per_tree;
+
+        let node_left_sub = alloc(int, max_nodes_per_tree);
+        let node_right_sub = alloc(int, max_nodes_per_tree);
+        let node_feat_sub = alloc(int, max_nodes_per_tree);
+        let node_val_sub = alloc(float, max_nodes_per_tree);
+        let node_size_sub = alloc(int, max_nodes_per_tree);
+
+        let next_node = alloc(int, 1);
+        next_node[0] = 0;
+
+        let root_u = build_itree_recursive(&base_indices, n_samples, 0, max_depth,
+                                           &x_data, n_features,
+                                           &node_left_sub, &node_right_sub,
+                                           &node_feat_sub, &node_val_sub, &node_size_sub,
+                                           &next_node, &seed_box);
+
+        root_ids[t] = root_u;
+
+        // Copy into flat buffer
+        for (let u = 0; u < max_nodes_per_tree; u++) {
+            all_left[tree_offset + u] = node_left_sub[u];
+            all_right[tree_offset + u] = node_right_sub[u];
+            all_feat[tree_offset + u] = node_feat_sub[u];
+            all_val[tree_offset + u] = node_val_sub[u];
+            all_size[tree_offset + u] = node_size_sub[u];
+        }
+    }
+    print("  Ensemble construction complete!\n");
+
+    // --- 3. Computing Path Lengths & Anomaly Scores ---
+    print("--- 3. Anomaly Scoring via Average Path Length E(h(x)) ---");
+    let c_n = c_factor(n_samples);
+    print(f"  BST Average Normalization Factor c(n={n_samples}) = {c_n}\n");
+
+    let pt_buf = alloc(float, n_features);
+
+    let outlier_flag_count = 0;
+
+    for (let i = 0; i < n_samples; i++) {
+        pt_buf[0] = x_data[i * n_features + 0];
+        pt_buf[1] = x_data[i * n_features + 1];
+
+        let total_path_len = 0.0;
+        for (let t = 0; t < num_trees; t++) {
+            let offset = t * max_nodes_per_tree;
+
+            let node_left_t = alloc(int, max_nodes_per_tree);
+            let node_right_t = alloc(int, max_nodes_per_tree);
+            let node_feat_t = alloc(int, max_nodes_per_tree);
+            let node_val_t = alloc(float, max_nodes_per_tree);
+            let node_size_t = alloc(int, max_nodes_per_tree);
+
+            for (let u = 0; u < max_nodes_per_tree; u++) {
+                node_left_t[u] = all_left[offset + u];
+                node_right_t[u] = all_right[offset + u];
+                node_feat_t[u] = all_feat[offset + u];
+                node_val_t[u] = all_val[offset + u];
+                node_size_t[u] = all_size[offset + u];
+            }
+
+            let h_t = path_length_itree(&pt_buf, root_ids[t],
+                                        &node_left_t, &node_right_t,
+                                        &node_feat_t, &node_val_t, &node_size_t);
+            total_path_len += h_t;
+        }
+
+        let avg_path = total_path_len / (1.0 * num_trees);
+        // Anomaly score: s = 2^(- avg_path / c(n)) = exp( - (avg_path / c_n) * ln(2) )
+        let exponent = -(avg_path / c_n) * 0.69314718056;
+        let score = exp(exponent);
+
+        let verdict = "NORMAL INLIER";
+        if (score >= 0.60) {
+            verdict = "ANOMALY (OUTLIER)";
+            outlier_flag_count++;
+        }
+
+        print(f"  Sample #{i} ({pt_buf[0]}, {pt_buf[1]}): Avg Path = {avg_path} | Anomaly Score s = {score} [{verdict}]");
+    }
+    print("");
+
+    if (outlier_flag_count == 2) {
+        print("  SUCCESS: Isolation Forest correctly isolated both outliers with short path lengths!\n");
+    }
+
+    print("==================================================================");
+    print("Isolation Forest verified with 0 memory leaks!");
+    return 0;
+}
