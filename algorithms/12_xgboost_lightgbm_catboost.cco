@@ -1,46 +1,44 @@
-// Algorithm 12: Advanced Gradient Boosting - XGBoost, LightGBM (GOSS), and CatBoost (Target Encoding)
+// Algorithm 12: XGBoost, LightGBM & CatBoost Innovations (2nd Order Splits, GOSS & Ordered Target Encoding)
 
 /*
 ================================================================================
-              ADVANCED GRADIENT BOOSTING: XGBOOST / LIGHTGBM / CATBOOST
+           XGBOOST, LIGHTGBM & CATBOOST INDUSTRIAL ENSEMBLE SUITE
 ================================================================================
 
-1. XGBoost Regularized Objective (Chen & Guestrin, 2016):
-       Obj^(t) ≈ Σ_{i=1}^N [ g_i * f_t(x_i) + (1/2) * h_i * f_t(x_i)^2 ] + Ω(f_t)
-       where:
-           g_i = ∂ℓ(y_i, ŷ^(t-1)) / ∂ŷ^(t-1)     (1st order gradient)
-           h_i = ∂²ℓ(y_i, ŷ^(t-1)) / ∂(ŷ^(t-1))² (2nd order hessian)
-           Ω(f) = γ * T + (1/2) * λ * Σ_{j=1}^T w_j²
+1. XGBoost (Chen & Guestrin, 2016):
+   - 2nd-Order Taylor Approximation of Loss:
+         L^{(t)} ≈ Σ_{i=1}^N [ l(y_i, ŷ^{(t-1)}) + g_i * f_t(x_i) + (1/2) h_i * f_t(x_i)^2 ] + Ω(f_t)
+         where g_i = ∂ ŷ^{(t-1)} l,  h_i = ∂^2 ŷ^{(t-1)} l
 
-2. Optimal Leaf Weight & Split Quality (Gain):
-       w_j* = - G_j / (H_j + λ),    where G_j = Σ_{i ∈ I_j} g_i,  H_j = Σ_{i ∈ I_j} h_i
-       Gain = (1/2) * [ (G_L)² / (H_L + λ) + (G_R)² / (H_R + λ) - (G_L + G_R)² / (H_L + H_R + λ) ] - γ
+   - Regularization Term:
+         Ω(f) = γ * T + (λ / 2) * Σ_{j=1}^T w_j^2
 
-   * Pruning Criterion: Split is pruned away if Gain < 0 (i.e. gain cannot cover cost γ).
+   - Optimal Leaf Weight w_j^*:
+         w_j^* = - G_j / (H_j + λ),   where G_j = Σ_{i ∈ I_j} g_i,  H_j = Σ_{i ∈ I_j} h_i
 
-3. LightGBM GOSS (Gradient-based One-Side Sampling - Ke et al., 2017):
-       Split dataset into:
-           - Top-a subset A (samples with top |g_i| errors)
-           - Random sample B of size b * |A_c| from remaining small-gradient samples
-       Weight multiplier for small-gradient samples:
-           w_b = (1 - a) / b
-       Estimated Gradient:
-           G̃_j = Σ_{i ∈ A ∩ I_j} g_i + ((1 - a) / b) * Σ_{i ∈ B ∩ I_j} g_i
+   - Split Score Gain (with γ pruning threshold):
+         Gain = (1/2) * [ G_L^2 / (H_L + λ) + G_R^2 / (H_R + λ) - (G_L + G_R)^2 / (H_L + H_R + λ) ] - γ
 
-4. CatBoost Ordered Target Encoding (Prokhorenkova et al., 2018):
-       Avoids target leakage using permutation:
-           x̂_i = ( Σ_{j < i, cat_j == cat_i} y_j + prior_weight * P ) / ( count_{j < i} + prior_weight )
+2. LightGBM GOSS (Gradient-based One-Side Sampling) (Ke et al., 2017):
+   - Keep top a * 100% instances with largest gradients (set A).
+   - Randomly sample b * 100% instances with small gradients (set B).
+   - Compensate small-gradient instances with weight factor: (1 - a) / b
+
+3. CatBoost Ordered Target Encoding (Prokhorenkova et al., 2018):
+   - Computes target statistics online over a random permutation σ:
+         x̂_k = ( Σ_{j=1}^{p-1} [ x_{σ_j, k} == x_{σ_p, k} ] * y_{σ_j} + a * P ) / ( Σ_{j=1}^{p-1} [ x_{σ_j, k} == x_{σ_p, k} ] + a )
+         where P is prior, and a > 0 is prior weight. Eliminates target leakage!
 ================================================================================
 */
 
 struct XGBTree {
     is_leaf: bool;
-    feature: int;
+    feature: int;       // 0 for x1, 1 for x2
     threshold: float;
     gain: float;
     weight_left: float;
     weight_right: float;
-    weight_single: float; // If pruned
+    weight_single: float;
     pruned: bool;
 }
 
@@ -53,52 +51,51 @@ fn abs_flt(v: float) -> float {
 // 1. XGBoost 2nd-Order Split Search with L2 (λ) & Complexity (γ)
 // -------------------------------------------------------------
 fn train_xgboost_stump(x1: &float[], x2: &float[], g: &float[], h: &float[], n: int, lambda_reg: float, gamma_prune: float) -> XGBTree {
-    let best_feat: int = -1;
-    let best_thresh: float = 0.0;
-    let max_gain: float = -9999.0;
-    let best_w_l: float = 0.0;
-    let best_w_r: float = 0.0;
+    let best_feat = -1;
+    let best_thresh = 0.0;
+    let max_gain = -9999.0;
+    let best_w_l = 0.0;
+    let best_w_r = 0.0;
 
     // Total gradient and hessian of parent
-    let g_total: float = 0.0;
-    let h_total: float = 0.0;
+    let g_total = 0.0;
+    let h_total = 0.0;
     for (let i = 0; i < n; i++) {
         g_total += g[i];
         h_total += h[i];
     }
-    let parent_score: float = (g_total * g_total) / (h_total + lambda_reg);
-    let single_weight: float = -g_total / (h_total + lambda_reg);
+    let parent_score = (g_total * g_total) / (h_total + lambda_reg);
+    let single_weight = -g_total / (h_total + lambda_reg);
 
     for (let f = 0; f < 2; f++) {
         for (let i = 0; i < n; i++) {
-            let t: float = x1[i];
+            let t = x1[i];
             if (f == 1) { t = x2[i]; }
 
-            let g_l: float = 0.0; let h_l: float = 0.0; let cnt_l: int = 0;
-            let g_r: float = 0.0; let h_r: float = 0.0; let cnt_r: int = 0;
+            let g_l = 0.0; let h_l = 0.0; let cnt_l = 0;
+            let g_r = 0.0; let h_r = 0.0; let cnt_r = 0;
 
             for (let j = 0; j < n; j++) {
-                let v: float = x1[j];
+                let v = x1[j];
                 if (f == 1) { v = x2[j]; }
 
                 if (v <= t) {
                     g_l += g[j];
                     h_l += h[j];
-                    cnt_l = cnt_l + 1;
+                    cnt_l++;
                 } else {
                     g_r += g[j];
                     h_r += h[j];
-                    cnt_r = cnt_r + 1;
+                    cnt_r++;
                 }
             }
 
             if (cnt_l > 0 && cnt_r > 0) {
-                let left_score: float = (g_l * g_l) / (h_l + lambda_reg);
-                let right_score: float = (g_r * g_r) / (h_r + lambda_reg);
+                let left_score = (g_l * g_l) / (h_l + lambda_reg);
+                let right_score = (g_r * g_r) / (h_r + lambda_reg);
 
                 // XGBoost Split Gain Formula:
-                // Gain = 0.5 * [ G_L^2/(H_L+λ) + G_R^2/(H_R+λ) - (G_L+G_R)^2/(H_L+H_R+λ) ] - γ
-                let gain: float = 0.5 * (left_score + right_score - parent_score) - gamma_prune;
+                let gain = 0.5 * (left_score + right_score - parent_score) - gamma_prune;
 
                 if (gain > max_gain) {
                     max_gain = gain;
@@ -112,7 +109,7 @@ fn train_xgboost_stump(x1: &float[], x2: &float[], g: &float[], h: &float[], n: 
     }
 
     // Pruning check: If max_gain < 0, the split is rejected by gamma penalty!
-    let is_pruned: bool = false;
+    let is_pruned = false;
     if (max_gain < 0.0) {
         is_pruned = true;
     }
@@ -134,7 +131,7 @@ fn predict_xgboost_stump(tree: &XGBTree, x1_val: float, x2_val: float) -> float 
         return tree.weight_single;
     }
 
-    let val: float = x1_val;
+    let val = x1_val;
     if (tree.feature == 1) { val = x2_val; }
 
     if (val <= tree.threshold) {
@@ -148,16 +145,16 @@ fn predict_xgboost_stump(tree: &XGBTree, x1_val: float, x2_val: float) -> float 
 // -------------------------------------------------------------
 fn demo_lightgbm_goss(g: &float[], n: int, top_k: int) -> float {
     // Collect absolute gradients and sort top_k large errors
-    let abs_g: float[] = alloc(float, n);
-    let is_top: bool[] = alloc(bool, n);
+    let abs_g = alloc(float, n);
+    let is_top = alloc(bool, n);
     for (let i = 0; i < n; i++) {
         abs_g[i] = abs_flt(g[i]);
         is_top[i] = false;
     }
 
     for (let k = 0; k < top_k; k++) {
-        let max_idx: int = -1;
-        let max_val: float = -1.0;
+        let max_idx = -1;
+        let max_val = -1.0;
         for (let i = 0; i < n; i++) {
             if (!is_top[i] && abs_g[i] > max_val) {
                 max_val = abs_g[i];
@@ -170,10 +167,10 @@ fn demo_lightgbm_goss(g: &float[], n: int, top_k: int) -> float {
     }
 
     // Small gradients are sampled (e.g. 50% subsample) with multiplier (1 - a) / b
-    let sum_top: float = 0.0;
-    let sum_small_sampled: float = 0.0;
-    let small_count: int = 0;
-    let multiplier: float = 2.0; // (1 - 0.5) / 0.25 = 2.0
+    let sum_top = 0.0;
+    let sum_small_sampled = 0.0;
+    let small_count = 0;
+    let multiplier = 2.0; // (1 - 0.5) / 0.25 = 2.0
 
     for (let i = 0; i < n; i++) {
         if (is_top[i]) {
@@ -183,7 +180,7 @@ fn demo_lightgbm_goss(g: &float[], n: int, top_k: int) -> float {
             if (small_count % 2 == 0) {
                 sum_small_sampled += g[i] * multiplier;
             }
-            small_count = small_count + 1;
+            small_count++;
         }
     }
 
@@ -197,22 +194,21 @@ fn demo_catboost_target_encoding(cat_id: &int[], y: &int[], n: int, prior_p: flo
     print("  Ordered Online Target Encoding (Prevents Target Leakage):");
 
     for (let i = 0; i < n; i++) {
-        let matching_sum: float = 0.0;
-        let matching_count: int = 0;
+        let matching_sum = 0.0;
+        let matching_count = 0;
 
         // Only compute statistics strictly BEFORE time/order step i (ordered boosting principle)
         for (let j = 0; j < i; j++) {
             if (cat_id[j] == cat_id[i]) {
                 matching_sum += 1.0 * y[j];
-                matching_count = matching_count + 1;
+                matching_count++;
             }
         }
 
         // CatBoost Smoothed Target Value:
-        // x_hat = (sum_y + a * P) / (count + a)
-        let numerator: float = matching_sum + prior_weight * prior_p;
-        let denominator: float = (1.0 * matching_count) + prior_weight;
-        let encoded_val: float = numerator / denominator;
+        let numerator = matching_sum + prior_weight * prior_p;
+        let denominator = (1.0 * matching_count) + prior_weight;
+        let encoded_val = numerator / denominator;
 
         print(f"    Step {i}: Category={cat_id[i]}, History Count={matching_count} -> Encoded Target = {encoded_val}");
     }
@@ -224,11 +220,11 @@ fn main() -> int {
     print("==================================================================\n");
 
     // --- PART 1: XGBOOST REGULARIZED SPLIT FINDING & GAMMA PRUNING ---
-    let n: int = 6;
-    let x1: float[] = alloc(float, n);
-    let x2: float[] = alloc(float, n);
-    let g: float[] = alloc(float, n);
-    let h: float[] = alloc(float, n);
+    let n = 6;
+    let x1 = alloc(float, n);
+    let x2 = alloc(float, n);
+    let g = alloc(float, n);
+    let h = alloc(float, n);
 
     x1[0] = 1.0; x2[0] = 2.0; g[0] = -2.5; h[0] = 1.0;
     x1[1] = 2.0; x2[1] = 1.0; g[1] = -2.0; h[1] = 1.0;
@@ -240,34 +236,33 @@ fn main() -> int {
 
     print("--- 1. XGBoost Regularized Splitting & Tree Pruning ---");
     // Test with low gamma (split accepted)
-    let xgb_accepted: XGBTree = train_xgboost_stump(&x1, &x2, &g, &h, n, 1.0, 0.5);
+    let xgb_accepted = train_xgboost_stump(&x1, &x2, &g, &h, n, 1.0, 0.5);
     print(f"  [Model A: γ=0.5] Split on Feature {xgb_accepted.feature} <= {xgb_accepted.threshold}");
     print(f"    Split Gain: {xgb_accepted.gain} | w_left={xgb_accepted.weight_left}, w_right={xgb_accepted.weight_right} | Pruned: {xgb_accepted.pruned}");
 
     // Test with high gamma (split pruned)
-    let xgb_pruned: XGBTree = train_xgboost_stump(&x1, &x2, &g, &h, n, 1.0, 50.0);
+    let xgb_pruned = train_xgboost_stump(&x1, &x2, &g, &h, n, 1.0, 50.0);
     print(f"  [Model B: γ=50.0] Complexity penalty exceeds gain!");
     print(f"    Split Gain: {xgb_pruned.gain} | Pruned: {xgb_pruned.pruned} | Fallback Leaf w={xgb_pruned.weight_single}\n");
 
-    let p_left: float = predict_xgboost_stump(&xgb_accepted, 1.8, 1.8);
-    let p_right: float = predict_xgboost_stump(&xgb_accepted, 5.5, 5.5);
+    let p_left = predict_xgboost_stump(&xgb_accepted, 1.8, 1.8);
+    let p_right = predict_xgboost_stump(&xgb_accepted, 5.5, 5.5);
     print(f"  XGBoost Prediction (1.8, 1.8) -> Leaf Update: {p_left}");
     print(f"  XGBoost Prediction (5.5, 5.5) -> Leaf Update: {p_right}\n");
 
     // --- PART 2: LIGHTGBM GOSS (Gradient-based One-Side Sampling) ---
     print("--- 2. LightGBM GOSS (Gradient-based One-Side Sampling) ---");
-    let full_g_sum: float = 0.0;
+    let full_g_sum = 0.0;
     for (let i = 0; i < n; i++) { full_g_sum += g[i]; }
-    let goss_g_sum: float = demo_lightgbm_goss(&g, n, 3);
+    let goss_g_sum = demo_lightgbm_goss(&g, n, 3);
     print(f"  Full Dataset Total Gradient       : {full_g_sum}");
     print(f"  GOSS Sub-sampled Gradient Estimate: {goss_g_sum}");
     print("  (Retains top gradients while downsampling small errors with variance compensation)\n");
 
     // --- PART 3: CATBOOST ORDERED TARGET ENCODING ---
     print("--- 3. CatBoost Ordered Target Encoding (Categorical Variables) ---");
-    // High-cardinality categorical variable (e.g. City ID: 101, 102)
-    let cats: int[] = alloc(int, 6);
-    let targets: int[] = alloc(int, 6);
+    let cats = alloc(int, 6);
+    let targets = alloc(int, 6);
 
     cats[0] = 101; targets[0] = 1;
     cats[1] = 102; targets[1] = 0;
