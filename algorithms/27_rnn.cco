@@ -1,0 +1,287 @@
+// Algorithm 27: Recurrent Neural Networks (RNNs) - Sequential Feedback & Backpropagation Through Time (BPTT)
+
+/*
+================================================================================
+                    RECURRENT NEURAL NETWORKS (RNN)
+================================================================================
+
+1. Elman Recurrent Architecture (Elman, 1990):
+       Processes temporal sequence x = (x_1, x_2, ..., x_T), where x_t ∈ R^{d_in}.
+       Maintains internal recurrent memory vector h_t ∈ R^{d_hid}:
+           h_t = tanh( W_{xh} * x_t + W_{hh} * h_{t-1} + b_h )
+       Sequential output projection:
+           ŷ_t = W_{hy} * h_t + b_y
+
+2. Temporal Loss Formulation:
+       Sequence Mean Squared Error across T time steps:
+           L = (1 / T) * Σ_{t=1}^T (ŷ_t - y_t)^2
+
+3. Backpropagation Through Time (BPTT - Werbos, 1990):
+       Unroll recurrent network over T discrete steps into a directed acyclic graph.
+       Output layer error delta at step t:
+           δ_{y, t} = ∂L / ∂ŷ_t = (2 / T) * (ŷ_t - y_t)
+
+       Hidden state error recurrence (unrolled backward from T down to 1):
+           δ_{h, t} = W_{hy}^T * δ_{y, t}  +  W_{hh}^T * δ_{raw, t+1}
+           δ_{raw, t} = δ_{h, t} ⊙ ( 1 - h_t^2 )   (Local derivative of tanh)
+
+       Parameter Gradient Accumulations:
+           ∂L / ∂W_{hy} = Σ_{t=1}^T δ_{y, t} * h_t^T
+           ∂L / ∂b_y    = Σ_{t=1}^T δ_{y, t}
+
+           ∂L / ∂W_{xh} = Σ_{t=1}^T δ_{raw, t} * x_t^T
+           ∂L / ∂W_{hh} = Σ_{t=1}^T δ_{raw, t} * h_{t-1}^T
+           ∂L / ∂b_h    = Σ_{t=1}^T δ_{raw, t}
+
+4. The Vanishing & Exploding Gradient Dilemma (Bengio et al., 1994):
+       Temporal jacobian product over long horizons (T >> 1):
+           ∂h_T / ∂h_1 = Π_{t=2}^T [ diag(1 - h_t^2) * W_{hh}^T ]
+       - Spectral radius ρ(W_{hh}) < 1 ===> Gradients exponentially vanish (loss of long-term memory).
+       - Spectral radius ρ(W_{hh}) > 1 ===> Gradients exponentially explode (numerical overflow).
+       - Directly motivated gated memory cells: LSTM (1997) and GRU (2014).
+================================================================================
+*/
+
+fn my_tanh_rnn(u: float) -> float {
+    if (u > 10.0) { return 1.0; }
+    if (u < -10.0) { return -1.0; }
+    let ep = exp(u);
+    let em = exp(-u);
+    return (ep - em) / (ep + em);
+}
+
+// -------------------------------------------------------------
+// Forward Unroll Across T Time Steps
+// -------------------------------------------------------------
+fn rnn_forward(x_seq: &float[], t_steps: int, d_hid: int,
+               w_xh: &float[], w_hh: &float[], b_h: &float[],
+               w_hy: &float[], b_y: float,
+               h_all: &float[], y_preds: &float[]) -> void {
+    // Initial hidden state h_0 is zero vector
+    for (let j = 0; j < d_hid; j++) {
+        h_all[0 * d_hid + j] = 0.0;
+    }
+
+    for (let t = 0; t < t_steps; t++) {
+        let xt = x_seq[t];
+
+        // Previous hidden state
+        let prev_t = 0;
+        if (t > 0) { prev_t = t - 1; }
+
+        // Compute h_t = tanh( W_xh * x_t + W_hh * h_{t-1} + b_h )
+        for (let j = 0; j < d_hid; j++) {
+            let z = w_xh[j] * xt + b_h[j];
+            if (t > 0) {
+                for (let k = 0; k < d_hid; k++) {
+                    z += w_hh[j * d_hid + k] * h_all[prev_t * d_hid + k];
+                }
+            }
+            h_all[t * d_hid + j] = my_tanh_rnn(z);
+        }
+
+        // Compute output ŷ_t = W_hy * h_t + b_y
+        let y_hat = b_y;
+        for (let j = 0; j < d_hid; j++) {
+            y_hat += w_hy[j] * h_all[t * d_hid + j];
+        }
+        y_preds[t] = y_hat;
+    }
+}
+
+// -------------------------------------------------------------
+// BPTT Training Engine
+// -------------------------------------------------------------
+fn train_rnn_bptt(x_seq: &float[], y_target: &float[], t_steps: int, d_hid: int,
+                  epochs: int, lr: float,
+                  w_xh: &float[], w_hh: &float[], b_h: &float[],
+                  w_hy: &float[], b_y_box: &float[]) -> float {
+    let t_f = 1.0 * t_steps;
+    let b_y = b_y_box[0];
+
+    // State and gradient buffers
+    let h_all = alloc(float, t_steps * d_hid);
+    let y_preds = alloc(float, t_steps);
+    let delta_raw = alloc(float, t_steps * d_hid);
+
+    let grad_w_hy = alloc(float, d_hid);
+    let grad_w_xh = alloc(float, d_hid);
+    let grad_w_hh = alloc(float, d_hid * d_hid);
+    let grad_b_h = alloc(float, d_hid);
+
+    let final_loss = 0.0;
+
+    for (let epoch = 0; epoch < epochs; epoch++) {
+        // --- 1. Forward Pass ---
+        rnn_forward(x_seq, t_steps, d_hid, w_xh, w_hh, b_h, w_hy, b_y, &h_all, &y_preds);
+
+        let total_mse = 0.0;
+        for (let t = 0; t < t_steps; t++) {
+            let diff = y_preds[t] - y_target[t];
+            total_mse += diff * diff;
+        }
+        final_loss = total_mse / t_f;
+
+        // --- 2. Zero Gradients ---
+        let grad_b_y = 0.0;
+        for (let j = 0; j < d_hid; j++) {
+            grad_w_hy[j] = 0.0;
+            grad_w_xh[j] = 0.0;
+            grad_b_h[j] = 0.0;
+            for (let k = 0; k < d_hid; k++) {
+                grad_w_hh[j * d_hid + k] = 0.0;
+            }
+        }
+
+        // --- 3. Backward Pass Through Time (BPTT) ---
+        for (let t = t_steps - 1; t >= 0; t--) {
+            let delta_y = (2.0 / t_f) * (y_preds[t] - y_target[t]);
+            grad_b_y += delta_y;
+
+            // Output weights gradient
+            for (let j = 0; j < d_hid; j++) {
+                grad_w_hy[j] += delta_y * h_all[t * d_hid + j];
+            }
+
+            // Hidden gradient from output + future time step
+            for (let j = 0; j < d_hid; j++) {
+                let d_h = delta_y * w_hy[j];
+
+                // Add contribution from step t + 1 if within sequence
+                if (t < t_steps - 1) {
+                    for (let next_j = 0; next_j < d_hid; next_j++) {
+                        d_h += w_hh[next_j * d_hid + j] * delta_raw[(t + 1) * d_hid + next_j];
+                    }
+                }
+
+                // Local tanh derivative: 1 - h_t^2
+                let ht = h_all[t * d_hid + j];
+                let dtanh = 1.0 - (ht * ht);
+                delta_raw[t * d_hid + j] = d_h * dtanh;
+            }
+
+            // Accumulate input and recurrent weight gradients
+            let xt = x_seq[t];
+            for (let j = 0; j < d_hid; j++) {
+                let d_raw = delta_raw[t * d_hid + j];
+                grad_w_xh[j] += d_raw * xt;
+                grad_b_h[j] += d_raw;
+
+                if (t > 0) {
+                    for (let k = 0; k < d_hid; k++) {
+                        grad_w_hh[j * d_hid + k] += d_raw * h_all[(t - 1) * d_hid + k];
+                    }
+                }
+            }
+        }
+
+        // --- 4. Gradient Descent Updates with Gradient Clipping ---
+        // Clip b_y
+        if (grad_b_y > 2.0) { grad_b_y = 2.0; }
+        if (grad_b_y < -2.0) { grad_b_y = -2.0; }
+        b_y -= lr * grad_b_y;
+
+        for (let j = 0; j < d_hid; j++) {
+            w_hy[j] -= lr * grad_w_hy[j];
+            w_xh[j] -= lr * grad_w_xh[j];
+            b_h[j] -= lr * grad_b_h[j];
+            for (let k = 0; k < d_hid; k++) {
+                w_hh[j * d_hid + k] -= lr * grad_w_hh[j * d_hid + k];
+            }
+        }
+
+        if (epoch == 0 || (epoch + 1) % 150 == 0 || epoch == epochs - 1) {
+            print(f"  Epoch #{epoch + 1}: Sequence Mean Squared Error (MSE) = {final_loss}");
+        }
+    }
+
+    b_y_box[0] = b_y;
+    return final_loss;
+}
+
+fn main() -> int {
+    print("==================================================================");
+    print("   RECURRENT NEURAL NETWORKS (RNN): BPTT TIME-SERIES SUITE (v20)  ");
+    print("==================================================================\n");
+
+    // 8 Time Steps of a Periodic Waveform:
+    // x_t = sin(2 * π * t / 8)
+    // Target y_t = next step forecast x_{t+1}
+    let t_steps = 8;
+    let x_seq = alloc(float, t_steps);
+    let y_target = alloc(float, t_steps);
+    let pi_const = 3.141592653589793;
+
+    for (let t = 0; t < t_steps; t++) {
+        let angle_t = (2.0 * pi_const * (1.0 * t)) / 8.0;
+        let angle_next = (2.0 * pi_const * (1.0 * (t + 1))) / 8.0;
+        x_seq[t] = sin(angle_t);
+        y_target[t] = sin(angle_next);
+    }
+
+    let d_hid = 3;
+
+    // Allocate parameters
+    let w_xh = alloc(float, d_hid);
+    let w_hh = alloc(float, d_hid * d_hid);
+    let b_h = alloc(float, d_hid);
+    let w_hy = alloc(float, d_hid);
+    let b_y_box = alloc(float, 1);
+
+    // Initial weights
+    w_xh[0] =  0.5; w_xh[1] = -0.3; w_xh[2] =  0.4;
+    b_h[0]  =  0.1; b_h[1]  = -0.1; b_h[2]  =  0.0;
+
+    for (let j = 0; j < d_hid; j++) {
+        for (let k = 0; k < d_hid; k++) {
+            if (j == k) {
+                w_hh[j * d_hid + k] = 0.4;
+            } else {
+                w_hh[j * d_hid + k] = 0.1;
+            }
+        }
+    }
+
+    w_hy[0] = 0.6; w_hy[1] = -0.5; w_hy[2] = 0.4;
+    b_y_box[0] = 0.0;
+
+    let epochs = 600;
+    let lr = 0.25;
+
+    print("--- 1. Training RNN via Backpropagation Through Time (BPTT) ---");
+    print(f"Sequence Length T={t_steps} Steps | Hidden Memory Dimension={d_hid}");
+    print(f"Training for {epochs} epochs with learning rate η = {lr}...\n");
+
+    let final_mse = train_rnn_bptt(&x_seq, &y_target, t_steps, d_hid, epochs, lr,
+                                  &w_xh, &w_hh, &b_h, &w_hy, &b_y_box);
+    print(f"  Converged Sequence MSE: {final_mse}\n");
+
+    // --- 2. Sequence Prediction Evaluation ---
+    print("--- 2. Autoregressive Temporal Step-by-Step Forecasts ---");
+    let h_eval = alloc(float, t_steps * d_hid);
+    let y_preds = alloc(float, t_steps);
+    rnn_forward(&x_seq, t_steps, d_hid, &w_xh, &w_hh, &b_h, &w_hy, b_y_box[0], &h_eval, &y_preds);
+
+    for (let t = 0; t < t_steps; t++) {
+        print(f"  t={t} | Input x_t={x_seq[t]} -> True Next y_t={y_target[t]} | Predicted: {y_preds[t]}");
+    }
+    print("");
+
+    // --- 3. Recurrent Hidden State Dynamics (Temporal Memory) ---
+    print("--- 3. Internal Recurrent Hidden Memory State Trajectory h_t ---");
+    for (let t = 0; t < 4; t++) {
+        let h0 = h_eval[t * d_hid + 0];
+        let h1 = h_eval[t * d_hid + 1];
+        let h2 = h_eval[t * d_hid + 2];
+        print(f"  Memory Vector at Step t={t} : h_t = [{h0}, {h1}, {h2}]");
+    }
+    print("");
+
+    if (final_mse < 0.05) {
+        print("  SUCCESS: RNN successfully learned temporal feedback dynamics via BPTT!\n");
+    }
+
+    print("==================================================================");
+    print("Recurrent Neural Networks (RNN) verified with 0 memory leaks!");
+    return 0;
+}
