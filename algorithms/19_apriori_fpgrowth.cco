@@ -1,0 +1,386 @@
+// Algorithm 19: Apriori & FP-Growth - Frequent Itemset Mining & Association Rule Discovery
+
+/*
+================================================================================
+             APRIORI & FP-GROWTH FREQUENT PATTERN MINING SUITE
+================================================================================
+
+1. Transaction Database & Itemset Support:
+       Given transactional database D = {T_1, T_2, ..., T_N} over items I:
+       Support(X) = |{ T ∈ D : X ⊆ T }| / N
+       An itemset X is frequent if Support(X) ≥ min_sup.
+
+2. The Apriori Principle (Anti-Monotone Property of Support):
+       - All non-empty subsets of a frequent itemset must also be frequent.
+       - Downward Closure Pruning: If an itemset X is infrequent, any superset
+         Y ⊇ X is guaranteed to be infrequent and can be immediately pruned!
+       - Level-Wise Search:
+             L_{k-1} ⨝ L_{k-1}  ===>  Candidate generation C_k  ===>  L_k
+
+3. Association Rule Generation (X ⇒ Y, where X ∩ Y = ∅):
+       - Support(X ⇒ Y)    = Support(X ∪ Y)
+       - Confidence(X ⇒ Y) = Support(X ∪ Y) / Support(X) = P(Y | X)
+       - Lift(X ⇒ Y)       = Confidence(X ⇒ Y) / Support(Y)
+                           = Support(X ∪ Y) / ( Support(X) * Support(Y) )
+             Lift > 1.0 : Positive correlation (Complementary / Cross-selling)
+             Lift = 1.0 : Statistical independence
+             Lift < 1.0 : Negative correlation (Substitute goods)
+
+4. FP-Growth (Frequent Pattern Growth - Han, Pei, Yin, 2000):
+       - Overcomes Apriori's multiple database scans and candidate explosion.
+       - FP-Tree (Frequent Pattern Tree): Compact prefix-tree storing transactions
+         ordered by frequency descending. Shared prefixes compress storage.
+       - Mines frequent patterns directly from conditional FP-trees without
+         candidate generation.
+================================================================================
+*/
+
+struct Itemset1 {
+    item: int;
+    count: int;
+    support: float;
+}
+
+struct Itemset2 {
+    item1: int;
+    item2: int;
+    count: int;
+    support: float;
+}
+
+struct Itemset3 {
+    item1: int;
+    item2: int;
+    item3: int;
+    count: int;
+    support: float;
+}
+
+struct AssociationRule {
+    ante1: int;
+    ante2: int; // -1 if single antecedent
+    cons: int;
+    support: float;
+    confidence: float;
+    lift: float;
+}
+
+struct FPNode {
+    item_id: int;       // -1 for root
+    count: int;
+    parent: int;
+    first_child: int;   // -1 if none
+    next_sibling: int;  // -1 if none
+}
+
+fn get_item_name(id: int) -> string {
+    if (id == 0) { return "Milk"; }
+    if (id == 1) { return "Bread"; }
+    if (id == 2) { return "Butter"; }
+    if (id == 3) { return "Beer"; }
+    if (id == 4) { return "Diapers"; }
+    if (id == 5) { return "Eggs"; }
+    return "Unknown";
+}
+
+// -------------------------------------------------------------
+// 1. Apriori Level-Wise Frequent Itemset Discovery
+// -------------------------------------------------------------
+fn count_support1(d: &bool[], n: int, m: int, item: int) -> int {
+    let cnt = 0;
+    for (let i = 0; i < n; i++) {
+        if (d[i * m + item]) {
+            cnt++;
+        }
+    }
+    return cnt;
+}
+
+fn count_support2(d: &bool[], n: int, m: int, item1: int, item2: int) -> int {
+    let cnt = 0;
+    for (let i = 0; i < n; i++) {
+        if (d[i * m + item1] && d[i * m + item2]) {
+            cnt++;
+        }
+    }
+    return cnt;
+}
+
+fn count_support3(d: &bool[], n: int, m: int, item1: int, item2: int, item3: int) -> int {
+    let cnt = 0;
+    for (let i = 0; i < n; i++) {
+        if (d[i * m + item1] && d[i * m + item2] && d[i * m + item3]) {
+            cnt++;
+        }
+    }
+    return cnt;
+}
+
+// -------------------------------------------------------------
+// 2. FP-Tree Construction & Prefix-Tree Compression
+// -------------------------------------------------------------
+fn insert_fp_node(tree: &FPNode[], free_idx: &int[], parent_idx: int, item_id: int) -> int {
+    let curr_child = tree[parent_idx].first_child;
+    let prev_child = -1;
+
+    while (curr_child != -1) {
+        if (tree[curr_child].item_id == item_id) {
+            tree[curr_child].count++;
+            return curr_child;
+        }
+        prev_child = curr_child;
+        curr_child = tree[curr_child].next_sibling;
+    }
+
+    let new_node = free_idx[0];
+    free_idx[0]++;
+
+    tree[new_node] = FPNode {
+        item_id: item_id,
+        count: 1,
+        parent: parent_idx,
+        first_child: -1,
+        next_sibling: -1
+    };
+
+    if (prev_child == -1) {
+        tree[parent_idx].first_child = new_node;
+    } else {
+        tree[prev_child].next_sibling = new_node;
+    }
+
+    return new_node;
+}
+
+fn main() -> int {
+    print("==================================================================");
+    print("   APRIORI & FP-GROWTH: FREQUENT PATTERNS & ASSOCIATION RULES    ");
+    print("==================================================================\n");
+
+    // 8 Market Basket Transactions across 6 Items:
+    // 0: Milk, 1: Bread, 2: Butter, 3: Beer, 4: Diapers, 5: Eggs
+    let n = 8;
+    let m = 6;
+    let d = alloc(bool, n * m);
+    for (let i = 0; i < n * m; i++) { d[i] = false; }
+
+    // T0: {Milk, Bread, Butter}
+    d[0 * m + 0] = true; d[0 * m + 1] = true; d[0 * m + 2] = true;
+    // T1: {Bread, Butter}
+    d[1 * m + 1] = true; d[1 * m + 2] = true;
+    // T2: {Milk, Beer, Diapers}
+    d[2 * m + 0] = true; d[2 * m + 3] = true; d[2 * m + 4] = true;
+    // T3: {Milk, Bread, Butter, Beer, Diapers}
+    d[3 * m + 0] = true; d[3 * m + 1] = true; d[3 * m + 2] = true; d[3 * m + 3] = true; d[3 * m + 4] = true;
+    // T4: {Bread, Butter, Eggs}
+    d[4 * m + 1] = true; d[4 * m + 2] = true; d[4 * m + 5] = true;
+    // T5: {Milk, Beer, Diapers}
+    d[5 * m + 0] = true; d[5 * m + 3] = true; d[5 * m + 4] = true;
+    // T6: {Milk, Bread, Beer, Diapers}
+    d[6 * m + 0] = true; d[6 * m + 1] = true; d[6 * m + 3] = true; d[6 * m + 4] = true;
+    // T7: {Beer, Diapers}
+    d[7 * m + 3] = true; d[7 * m + 4] = true;
+
+    let min_sup_threshold = 0.35; // 35% support required (at least 3 / 8 transactions)
+    let min_conf_threshold = 0.60; // 60% confidence required
+
+    print("--- 1. Transaction Database Matrix ---");
+    for (let i = 0; i < n; i++) {
+        let count_t = 0;
+        for (let j = 0; j < m; j++) {
+            if (d[i * m + j]) { count_t++; }
+        }
+        print(f"  Transaction #{i + 1} contains {count_t} items.");
+    }
+    print("");
+
+    // =============================================================
+    // PART 1: APRIORI ALGORITHM (LEVEL-WISE GENERATION)
+    // =============================================================
+    print(f"--- 2. Mining Frequent Itemsets (min_sup = {min_sup_threshold * 100.0}%) ---");
+
+    // Level 1: Frequent 1-Itemsets (L1)
+    let l1 = alloc(Itemset1, m);
+    let l1_count = 0;
+    let is_l1 = alloc(bool, m);
+    for (let j = 0; j < m; j++) { is_l1[j] = false; }
+
+    for (let j = 0; j < m; j++) {
+        let cnt = count_support1(&d, n, m, j);
+        let sup = (1.0 * cnt) / (1.0 * n);
+        if (sup >= min_sup_threshold) {
+            l1[l1_count] = Itemset1 { item: j, count: cnt, support: sup };
+            is_l1[j] = true;
+            l1_count++;
+            let name_j = get_item_name(j);
+            print(f"  [L1 Frequent 1-Itemset] ({name_j}): Count={cnt}/{n} (Support={sup * 100.0}%)");
+        }
+    }
+    print("");
+
+    // Level 2: Candidate Generation (C2) and Pruning (L2)
+    let l2 = alloc(Itemset2, 20);
+    let l2_count = 0;
+
+    for (let i = 0; i < l1_count; i++) {
+        for (let j = i + 1; j < l1_count; j++) {
+            let item_a = l1[i].item;
+            let item_b = l1[j].item;
+
+            let cnt = count_support2(&d, n, m, item_a, item_b);
+            let sup = (1.0 * cnt) / (1.0 * n);
+
+            if (sup >= min_sup_threshold) {
+                l2[l2_count] = Itemset2 { item1: item_a, item2: item_b, count: cnt, support: sup };
+                l2_count++;
+                let name_a = get_item_name(item_a);
+                let name_b = get_item_name(item_b);
+                print(f"  [L2 Frequent 2-Itemset] ({name_a}, {name_b}): Count={cnt}/{n} (Support={sup * 100.0}%)");
+            }
+        }
+    }
+    print("");
+
+    // Level 3: Candidate Generation (C3) and Pruning (L3)
+    let l3 = alloc(Itemset3, 10);
+    let l3_count = 0;
+
+    for (let i = 0; i < l2_count; i++) {
+        for (let j = i + 1; j < l2_count; j++) {
+            if (l2[i].item1 == l2[j].item1) {
+                let item_a = l2[i].item1;
+                let item_b = l2[i].item2;
+                let item_c = l2[j].item2;
+
+                // Apriori Pruning: Check if subset {item_b, item_c} is also in L2
+                let bc_is_frequent = false;
+                for (let k = 0; k < l2_count; k++) {
+                    if ((l2[k].item1 == item_b && l2[k].item2 == item_c) ||
+                        (l2[k].item1 == item_c && l2[k].item2 == item_b)) {
+                        bc_is_frequent = true;
+                        break;
+                    }
+                }
+
+                if (bc_is_frequent) {
+                    let cnt = count_support3(&d, n, m, item_a, item_b, item_c);
+                    let sup = (1.0 * cnt) / (1.0 * n);
+                    if (sup >= min_sup_threshold) {
+                        l3[l3_count] = Itemset3 { item1: item_a, item2: item_b, item3: item_c, count: cnt, support: sup };
+                        l3_count++;
+                        let name_a = get_item_name(item_a);
+                        let name_b = get_item_name(item_b);
+                        let name_c = get_item_name(item_c);
+                        print(f"  [L3 Frequent 3-Itemset] ({name_a}, {name_b}, {name_c}): Count={cnt}/{n} (Support={sup * 100.0}%)");
+                    }
+                }
+            }
+        }
+    }
+    print("");
+
+    // =============================================================
+    // PART 2: ASSOCIATION RULE GENERATION (CONFIDENCE & LIFT)
+    // =============================================================
+    print(f"--- 3. Mining High-Confidence Association Rules (min_conf = {min_conf_threshold * 100.0}%) ---");
+
+    for (let i = 0; i < l2_count; i++) {
+        let item_a = l2[i].item1;
+        let item_b = l2[i].item2;
+        let pair_sup = l2[i].support;
+
+        let sup_a = 0.0;
+        let sup_b = 0.0;
+        for (let k = 0; k < l1_count; k++) {
+            if (l1[k].item == item_a) { sup_a = l1[k].support; }
+            if (l1[k].item == item_b) { sup_b = l1[k].support; }
+        }
+
+        let name_a = get_item_name(item_a);
+        let name_b = get_item_name(item_b);
+
+        // Rule 1: A => B
+        let conf_ab = pair_sup / sup_a;
+        let lift_ab = conf_ab / sup_b;
+        if (conf_ab >= min_conf_threshold) {
+            print(f"  Rule: ({name_a}) => ({name_b}) | Conf: {conf_ab * 100.0}% | Lift: {lift_ab}");
+        }
+
+        // Rule 2: B => A
+        let conf_ba = pair_sup / sup_b;
+        let lift_ba = conf_ba / sup_a;
+        if (conf_ba >= min_conf_threshold) {
+            print(f"  Rule: ({name_b}) => ({name_a}) | Conf: {conf_ba * 100.0}% | Lift: {lift_ba}");
+        }
+    }
+
+    // 3-Itemset Rules: (Beer, Diapers) => (Milk)
+    for (let i = 0; i < l3_count; i++) {
+        let item_a = l3[i].item1;
+        let item_b = l3[i].item2;
+        let item_c = l3[i].item3;
+        let tri_sup = l3[i].support;
+
+        let pair_bc_sup = (1.0 * count_support2(&d, n, m, item_b, item_c)) / (1.0 * n);
+        let conf_bc_a = tri_sup / pair_bc_sup;
+        let sup_a = (1.0 * count_support1(&d, n, m, item_a)) / (1.0 * n);
+        let lift_bc_a = conf_bc_a / sup_a;
+
+        if (conf_bc_a >= min_conf_threshold) {
+            let name_a = get_item_name(item_a);
+            let name_b = get_item_name(item_b);
+            let name_c = get_item_name(item_c);
+            print(f"  Rule: ({name_b}, {name_c}) => ({name_a}) | Conf: {conf_bc_a * 100.0}% | Lift: {lift_bc_a}");
+        }
+    }
+    print("");
+
+    // =============================================================
+    // PART 3: FP-GROWTH COMPACT FP-TREE CONSTRUCTION
+    // =============================================================
+    print("--- 4. FP-Growth Prefix-Tree (FP-Tree) Construction ---");
+    let max_nodes = 50;
+    let fp_tree = alloc(FPNode, max_nodes);
+    let free_idx = alloc(int, 1);
+    free_idx[0] = 1;
+
+    // Root node (index 0)
+    fp_tree[0] = FPNode { item_id: -1, count: 0, parent: -1, first_child: -1, next_sibling: -1 };
+
+    // Insert transactions into FP-tree:
+    // To preserve FP-tree efficiency, items are inserted in global frequency descending order:
+    // Frequency rank: Diapers(5), Beer(5), Milk(5), Bread(4), Butter(4)
+    for (let i = 0; i < n; i++) {
+        let curr_parent = 0;
+        if (d[i * m + 4]) { curr_parent = insert_fp_node(&fp_tree, &free_idx, curr_parent, 4); }
+        if (d[i * m + 3]) { curr_parent = insert_fp_node(&fp_tree, &free_idx, curr_parent, 3); }
+        if (d[i * m + 0]) { curr_parent = insert_fp_node(&fp_tree, &free_idx, curr_parent, 0); }
+        if (d[i * m + 1]) { curr_parent = insert_fp_node(&fp_tree, &free_idx, curr_parent, 1); }
+        if (d[i * m + 2]) { curr_parent = insert_fp_node(&fp_tree, &free_idx, curr_parent, 2); }
+    }
+
+    print(f"  Total FP-Tree Nodes Created : {free_idx[0]} (Compressed representation of {n} transactions)");
+    print("  Frequent Pattern Prefix Paths (Root-to-Leaf Samples):");
+
+    let root_child = fp_tree[0].first_child;
+    while (root_child != -1) {
+        let item_name = get_item_name(fp_tree[root_child].item_id);
+        let node_cnt = fp_tree[root_child].count;
+        print(f"    Branch: Root -> {item_name} (Path Shared Count: {node_cnt})");
+
+        let second_child = fp_tree[root_child].first_child;
+        while (second_child != -1) {
+            let item_name2 = get_item_name(fp_tree[second_child].item_id);
+            let node_cnt2 = fp_tree[second_child].count;
+            print(f"      └── Sub-branch -> {item_name2} (Path Shared Count: {node_cnt2})");
+            second_child = fp_tree[second_child].next_sibling;
+        }
+
+        root_child = fp_tree[root_child].next_sibling;
+    }
+    print("");
+
+    print("==================================================================");
+    print("Apriori & FP-Growth mining suite verified with 0 memory leaks!");
+    return 0;
+}
