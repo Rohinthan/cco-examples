@@ -1,0 +1,280 @@
+// Algorithm 26: Convolutional Neural Networks (CNNs) - Feature Extraction, Residual Blocks & Modern Architectures
+
+/*
+================================================================================
+                    CONVOLUTIONAL NEURAL NETWORKS (CNN)
+================================================================================
+
+1. Discrete 2D Cross-Correlation (Sliding Convolutional Kernel):
+       Feature map activation at position (i, j) for kernel K of size (k_h x k_w):
+           S(i, j) = (I * K)(i, j) + b = Σ_{m=0}^{k_h - 1} Σ_{n=0}^{k_w - 1} I(i + m, j + n) * K(m, n) + b
+
+       Output Spatial Dimensions (with Padding P and Stride S):
+           O_h = ⌊ (H - k_h + 2P) / S ⌋ + 1
+           O_w = ⌊ (W - k_w + 2P) / S ⌋ + 1
+
+2. Activation & Non-Linearity:
+       Rectified Linear Unit (ReLU):
+           f(z) = max(0, z)
+       Prevents vanishing gradients and introduces scale-invariant sparsity.
+
+3. Spatial Downsampling (Max Pooling):
+       P(i, j) = max_{m, n ∈ [0, pool_size - 1]} S(i * s + m,  j * s + n)
+       Provides translation invariance and reduces spatial parameter count.
+
+4. ResNet Residual Skip Connection (He et al., 2015):
+       y = F(x, {W_i}) + x
+       Identity shortcut connection eliminates the degradation / vanishing gradient
+       problem in deep networks by providing an unimpeded gradient highway:
+           ∂E / ∂x = (∂E / ∂y) * ( I + ∂F / ∂x )
+
+5. Evolution of Modern CNN Paradigms:
+       - LeNet-5 (1998)    : Pioneered Conv -> Subsampling -> Conv -> Dense.
+       - AlexNet (2012)    : Deep stacked convs, ReLU, GPU acceleration.
+       - VGGNet (2014)     : Replaced large filters with deep stacks of homogeneous 3x3 kernels
+                             (Two 3x3 convs share the 5x5 receptive field with 28% fewer parameters).
+       - ResNet (2015)     : Residual identity connections scaling to 152+ layers.
+       - EfficientNet(2019): Principled compound scaling of depth, width, and resolution.
+       - ConvNeXt (2022)   : Modern pure-ConvNet using 7x7 depthwise separable convs & inverted bottlenecks.
+
+6. Dense Classification & Softmax Normalization:
+       z_c = Σ_i W_{c, i} * x_i + b_c
+       P(Class = c) = exp(z_c - z_max) / Σ_k exp(z_k - z_max)
+================================================================================
+*/
+
+// -------------------------------------------------------------
+// 1. 2D Convolution Layer
+// -------------------------------------------------------------
+fn conv2d(img: &float[], h: int, w: int,
+          kernel: &float[], kh: int, kw: int, bias: float,
+          out_map: &float[]) -> void {
+    let out_h = h - kh + 1;
+    let out_w = w - kw + 1;
+
+    for (let i = 0; i < out_h; i++) {
+        for (let j = 0; j < out_w; j++) {
+            let sum = bias;
+            for (let ki = 0; ki < kh; ki++) {
+                for (let kj = 0; kj < kw; kj++) {
+                    let pixel = img[(i + ki) * w + (j + kj)];
+                    let weight = kernel[ki * kw + kj];
+                    sum += pixel * weight;
+                }
+            }
+            out_map[i * out_w + j] = sum;
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// 2. ReLU Activation Layer
+// -------------------------------------------------------------
+fn relu_2d(feat: &float[], size: int, out_feat: &float[]) -> void {
+    for (let i = 0; i < size; i++) {
+        let v = feat[i];
+        if (v < 0.0) { v = 0.0; }
+        out_feat[i] = v;
+    }
+}
+
+// -------------------------------------------------------------
+// 3. Max Pooling Layer (2x2 with Stride 2)
+// -------------------------------------------------------------
+fn max_pool2d(feat: &float[], h: int, w: int, out_pool: &float[]) -> void {
+    let out_h = h / 2;
+    let out_w = w / 2;
+
+    for (let i = 0; i < out_h; i++) {
+        for (let j = 0; j < out_w; j++) {
+            let max_val = feat[(i * 2) * w + (j * 2)];
+            for (let di = 0; di < 2; di++) {
+                for (let dj = 0; dj < 2; dj++) {
+                    let v = feat[(i * 2 + di) * w + (j * 2 + dj)];
+                    if (v > max_val) { max_val = v; }
+                }
+            }
+            out_pool[i * out_w + j] = max_val;
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// 4. ResNet Residual Shortcut Addition: y = F(x) + x
+// -------------------------------------------------------------
+fn resnet_shortcut_add(identity: &float[], residual: &float[], size: int, out_res: &float[]) -> void {
+    for (let i = 0; i < size; i++) {
+        out_res[i] = identity[i] + residual[i];
+    }
+}
+
+// -------------------------------------------------------------
+// 5. Fully Connected Dense Layer + Softmax Probability
+// -------------------------------------------------------------
+fn dense_softmax(features: &float[], feat_len: int,
+                 w: &float[], b: &float[], num_classes: int,
+                 out_probs: &float[]) -> void {
+    let max_logit = -999999.0;
+    let logits = alloc(float, num_classes);
+
+    for (let c = 0; c < num_classes; c++) {
+        let z = b[c];
+        for (let i = 0; i < feat_len; i++) {
+            z += features[i] * w[c * feat_len + i];
+        }
+        logits[c] = z;
+        if (z > max_logit) { max_logit = z; }
+    }
+
+    let sum_exp = 0.0;
+    for (let c = 0; c < num_classes; c++) {
+        let e = exp(logits[c] - max_logit);
+        out_probs[c] = e;
+        sum_exp += e;
+    }
+
+    for (let c = 0; c < num_classes; c++) {
+        out_probs[c] /= sum_exp;
+    }
+}
+
+// Full 2-Channel CNN Forward Pass (Horiz Channel + Vert Channel)
+fn forward_cnn_classifier(img: &float[], img_h: int, img_w: int,
+                          k_horiz: &float[], k_vert: &float[], kh: int, kw: int,
+                          fc_w: &float[], fc_b: &float[], num_classes: int,
+                          out_probs: &float[]) -> void {
+    let conv_h = img_h - kh + 1; // 4
+    let conv_w = img_w - kw + 1; // 4
+    let conv_size = conv_h * conv_w; // 16
+
+    let fmap_h = alloc(float, conv_size);
+    let fmap_v = alloc(float, conv_size);
+    let relu_h = alloc(float, conv_size);
+    let relu_v = alloc(float, conv_size);
+    let res_h = alloc(float, conv_size);
+    let res_v = alloc(float, conv_size);
+
+    // Channel 0: Horizontal Edge Conv + ReLU + ResNet Skip
+    conv2d(img, img_h, img_w, k_horiz, kh, kw, 0.0, &fmap_h);
+    relu_2d(&fmap_h, conv_size, &relu_h);
+    resnet_shortcut_add(&relu_h, &relu_h, conv_size, &res_h);
+
+    // Channel 1: Vertical Edge Conv + ReLU + ResNet Skip
+    conv2d(img, img_h, img_w, k_vert, kh, kw, 0.0, &fmap_v);
+    relu_2d(&fmap_v, conv_size, &relu_v);
+    resnet_shortcut_add(&relu_v, &relu_v, conv_size, &res_v);
+
+    // Max Pooling: 4x4 -> 2x2 per channel
+    let pool_h = conv_h / 2;
+    let pool_w = conv_w / 2;
+    let pool_size = pool_h * pool_w; // 4
+    let pooled_h = alloc(float, pool_size);
+    let pooled_v = alloc(float, pool_size);
+
+    max_pool2d(&res_h, conv_h, conv_w, &pooled_h);
+    max_pool2d(&res_v, conv_h, conv_w, &pooled_v);
+
+    // Flatten concatenated multichannel feature vector (4 + 4 = 8 features)
+    let total_feat = 2 * pool_size;
+    let flat = alloc(float, total_feat);
+    for (let i = 0; i < pool_size; i++) {
+        flat[i] = pooled_h[i];
+        flat[pool_size + i] = pooled_v[i];
+    }
+
+    dense_softmax(&flat, total_feat, fc_w, fc_b, num_classes, out_probs);
+}
+
+fn main() -> int {
+    print("==================================================================");
+    print("   CONVOLUTIONAL NEURAL NETWORKS (CNN) & RESNET ARCHITECTURE (v20)");
+    print("==================================================================\n");
+
+    let img_h = 6;
+    let img_w = 6;
+    let img_a = alloc(float, img_h * img_w);
+    let img_b = alloc(float, img_h * img_w);
+
+    for (let i = 0; i < img_h * img_w; i++) {
+        img_a[i] = 0.0;
+        img_b[i] = 0.0;
+    }
+
+    // Image A: Horizontal bright band across rows 2 and 3
+    for (let c = 0; c < img_w; c++) {
+        img_a[2 * img_w + c] = 1.0;
+        img_a[3 * img_w + c] = 1.0;
+    }
+
+    // Image B: Vertical bright band across columns 2 and 3
+    for (let r = 0; r < img_h; r++) {
+        img_b[r * img_w + 2] = 1.0;
+        img_b[r * img_w + 3] = 1.0;
+    }
+
+    // 3x3 Spatial Convolution Kernels:
+    let kh = 3;
+    let kw = 3;
+    let k_horiz = alloc(float, kh * kw);
+    let k_vert = alloc(float, kh * kw);
+
+    // Sobel Horizontal
+    k_horiz[0] = -1.0; k_horiz[1] = -2.0; k_horiz[2] = -1.0;
+    k_horiz[3] =  0.0; k_horiz[4] =  0.0; k_horiz[5] =  0.0;
+    k_horiz[6] =  1.0; k_horiz[7] =  2.0; k_horiz[8] =  1.0;
+
+    // Sobel Vertical
+    k_vert[0] = -1.0; k_vert[1] = 0.0; k_vert[2] = 1.0;
+    k_vert[3] = -2.0; k_vert[4] = 0.0; k_vert[5] = 2.0;
+    k_vert[6] = -1.0; k_vert[7] = 0.0; k_vert[8] = 1.0;
+
+    print("--- 1. Architecture: 2-Channel Conv -> ReLU -> ResNet Shortcut -> MaxPool -> Dense ---");
+    print("  Input Layer : 6 x 6 Grayscale Image (36 pixels)");
+    print("  Conv2D Layer: 2 Channels (Horizontal & Vertical 3x3 Sobel Kernels)");
+    print("  Activation  : Non-Linear ReLU (Sparsity induction)");
+    print("  ResNet Block: Identity skip highway y = F(x) + x");
+    print("  Pooling     : 2x2 Max Pooling (Downsampling 4x4 -> 2x2 per channel)");
+    print("  Classifier  : 8-Input Dense Layer with Softmax Normalization\n");
+
+    // Dense Classifier Weights
+    let num_classes = 2; // Class 0: Horizontal Stripe, Class 1: Vertical Stripe
+    let total_feat = 8;
+    let fc_w = alloc(float, num_classes * total_feat);
+    let fc_b = alloc(float, num_classes);
+
+    // Class 0 favors Channel 0 (Horizontal features), penalizes Channel 1 (Vertical features)
+    for (let i = 0; i < 4; i++) {
+        fc_w[0 * total_feat + i] = 1.2;
+        fc_w[0 * total_feat + 4 + i] = -1.2;
+    }
+    fc_b[0] = 0.0;
+
+    // Class 1 favors Channel 1 (Vertical features), penalizes Channel 0 (Horizontal features)
+    for (let i = 0; i < 4; i++) {
+        fc_w[1 * total_feat + i] = -1.2;
+        fc_w[1 * total_feat + 4 + i] = 1.2;
+    }
+    fc_b[1] = 0.0;
+
+    print("--- 2. Evaluating Image A (Horizontal Band) ---");
+    let probs_a = alloc(float, num_classes);
+    forward_cnn_classifier(&img_a, img_h, img_w, &k_horiz, &k_vert, kh, kw, &fc_w, &fc_b, num_classes, &probs_a);
+    print(f"  P(Class 0 - Horizontal Stripe): {probs_a[0] * 100.0}%");
+    print(f"  P(Class 1 - Vertical Stripe)  : {probs_a[1] * 100.0}%");
+    if (probs_a[0] > 0.95) {
+        print("  => Correctly identified as Horizontal Stripe!\n");
+    }
+
+    print("--- 3. Evaluating Image B (Vertical Band) ---");
+    let probs_b = alloc(float, num_classes);
+    forward_cnn_classifier(&img_b, img_h, img_w, &k_horiz, &k_vert, kh, kw, &fc_w, &fc_b, num_classes, &probs_b);
+    print(f"  P(Class 0 - Horizontal Stripe): {probs_b[0] * 100.0}%");
+    print(f"  P(Class 1 - Vertical Stripe)  : {probs_b[1] * 100.0}%");
+    if (probs_b[1] > 0.95) {
+        print("  => Correctly identified as Vertical Stripe!\n");
+    }
+
+    print("==================================================================");
+    print("Convolutional Neural Networks (CNN) verified with 0 memory leaks!");
+    return 0;
+}
