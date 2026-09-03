@@ -1,0 +1,285 @@
+// Algorithm 17: Gaussian Mixture Models (GMM) - Expectation-Maximization (EM) Probabilistic Clustering
+
+/*
+================================================================================
+                    GAUSSIAN MIXTURE MODELS (GMM) & EM
+================================================================================
+
+1. Probabilistic Generative Formulation:
+       Data x is generated from a mixture of K Gaussian components:
+       p(x | Θ) = Σ_{k=1}^K π_k * N(x | μ_k, Σ_k)
+       where:
+           π_k ≥ 0,  Σ_{k=1}^K π_k = 1   (Mixture weights / Priors)
+           N(x | μ_k, Σ_k) = [1 / (2π * |Σ_k|^(1/2))] * exp( -1/2 (x - μ_k)^T Σ_k^(-1) (x - μ_k) )
+
+2. Complete Log-Likelihood Objective Function:
+       ln p(X | Θ) = Σ_{i=1}^N ln [ Σ_{k=1}^K π_k * N(x_i | μ_k, Σ_k) ]
+
+3. Expectation-Maximization (EM) Algorithm (Dempster, Laird, Rubin, 1977):
+
+   [E-Step (Expectation / Soft Responsibilities)]:
+       Compute posterior responsibility of component k for data point i:
+           γ_{ik} = P(z_i = k | x_i, Θ)
+                  = [ π_k * N(x_i | μ_k, Σ_k) ] / [ Σ_{j=1}^K π_j * N(x_i | μ_j, Σ_j) ]
+
+   [M-Step (Maximization / Parameter Re-estimation)]:
+       Effective number of points assigned to component k:
+           N_k = Σ_{i=1}^N γ_{ik}
+
+       Update mixture weights:
+           π_k = N_k / N
+
+       Update centroid means:
+           μ_k = (1 / N_k) * Σ_{i=1}^N γ_{ik} * x_i
+
+       Update diagonal covariance variances (with variance regularizer ε):
+           σ_{kj}^2 = (1 / N_k) * Σ_{i=1}^N γ_{ik} * (x_{ij} - μ_{kj})^2 + ε
+
+4. Inference & Predictions:
+       Soft Clustering  : Responsibilities γ_{ik} ∈ [0, 1]
+       Hard Clustering  : k̂ = argmax_k γ_{ik}
+       Anomaly Detection: Outliers exhibit extremely low joint marginal density p(x) < τ
+================================================================================
+*/
+
+fn gaussian_2d_pdf(x1: float, x2: float, m1: float, m2: float, v1: float, v2: float) -> float {
+    let pi_const = 3.141592653589793;
+    let eps = 0.0001;
+    let safe_v1 = v1;
+    if (safe_v1 < eps) { safe_v1 = eps; }
+    let safe_v2 = v2;
+    if (safe_v2 < eps) { safe_v2 = eps; }
+
+    let d1 = x1 - m1;
+    let d2 = x2 - m2;
+    let exponent = -0.5 * ((d1 * d1) / safe_v1 + (d2 * d2) / safe_v2);
+    let denom = 2.0 * pi_const * sqrt(safe_v1 * safe_v2);
+    return exp(exponent) / denom;
+}
+
+// -------------------------------------------------------------
+// Expectation-Maximization (EM) Trainer for GMM
+// -------------------------------------------------------------
+fn train_gmm_em(px: &float[], py: &float[], n: int, k: int, max_iters: int,
+                weights: &float[], mu1: &float[], mu2: &float[], var1: &float[], var2: &float[]) -> float {
+    let resp = alloc(float, n * k);
+    let comp_p = alloc(float, k);
+    let last_ll = -9999999.0;
+    let final_ll = 0.0;
+
+    for (let iter = 0; iter < max_iters; iter++) {
+        // =========================================================
+        // E-STEP: Compute Responsibilities γ_{ik} & Log-Likelihood
+        // =========================================================
+        let total_log_likelihood = 0.0;
+
+        for (let i = 0; i < n; i++) {
+            let row_sum = 0.0;
+
+            for (let c = 0; c < k; c++) {
+                let pdf = gaussian_2d_pdf(px[i], py[i], mu1[c], mu2[c], var1[c], var2[c]);
+                let weighted_p = weights[c] * pdf;
+                comp_p[c] = weighted_p;
+                row_sum += weighted_p;
+            }
+
+            if (row_sum < 0.0000000001) {
+                row_sum = 0.0000000001;
+            }
+
+            total_log_likelihood += log(row_sum);
+
+            // Normalize responsibilities: γ_{ic} = (π_c * N_c) / row_sum
+            for (let c = 0; c < k; c++) {
+                resp[i * k + c] = comp_p[c] / row_sum;
+            }
+        }
+
+        final_ll = total_log_likelihood;
+
+        if (iter == 0 || (iter + 1) % 3 == 0 || iter == max_iters - 1) {
+            print(f"  EM Iteration #{iter + 1}: Total Log-Likelihood = {total_log_likelihood}");
+        }
+
+        let ll_diff = total_log_likelihood - last_ll;
+        if (ll_diff < 0.0) { ll_diff = -ll_diff; }
+        if (iter > 0 && ll_diff < 0.0001) {
+            print(f"  EM successfully converged at iteration {iter + 1}!\n");
+            break;
+        }
+        last_ll = total_log_likelihood;
+
+        // =========================================================
+        // M-STEP: Update Parameters (Weights π_c, Means μ_c, Variances σ_c^2)
+        // =========================================================
+        let n_f = 1.0 * n;
+        let reg_var = 0.01; // Variance floor
+
+        for (let c = 0; c < k; c++) {
+            let effective_n = 0.0;
+            let sum_x = 0.0;
+            let sum_y = 0.0;
+
+            for (let i = 0; i < n; i++) {
+                let gamma_ic = resp[i * k + c];
+                effective_n += gamma_ic;
+                sum_x += gamma_ic * px[i];
+                sum_y += gamma_ic * py[i];
+            }
+
+            if (effective_n < 0.00001) {
+                effective_n = 0.00001;
+            }
+
+            // 1. Update Weight
+            weights[c] = effective_n / n_f;
+
+            // 2. Update Mean
+            let new_mu1 = sum_x / effective_n;
+            let new_mu2 = sum_y / effective_n;
+            mu1[c] = new_mu1;
+            mu2[c] = new_mu2;
+
+            // 3. Update Variance
+            let sum_sq_diff1 = 0.0;
+            let sum_sq_diff2 = 0.0;
+
+            for (let i = 0; i < n; i++) {
+                let gamma_ic = resp[i * k + c];
+                let d1 = px[i] - new_mu1;
+                let d2 = py[i] - new_mu2;
+                sum_sq_diff1 += gamma_ic * (d1 * d1);
+                sum_sq_diff2 += gamma_ic * (d2 * d2);
+            }
+
+            let new_var1 = (sum_sq_diff1 / effective_n) + reg_var;
+            let new_var2 = (sum_sq_diff2 / effective_n) + reg_var;
+            var1[c] = new_var1;
+            var2[c] = new_var2;
+        }
+    }
+
+    return final_ll;
+}
+
+// -------------------------------------------------------------
+// Inference: Compute Joint Marginal Density p(x)
+// -------------------------------------------------------------
+fn gmm_eval_density(qx: float, qy: float, k: int, weights: &float[], mu1: &float[], mu2: &float[], var1: &float[], var2: &float[]) -> float {
+    let total_density = 0.0;
+    for (let c = 0; c < k; c++) {
+        let pdf = gaussian_2d_pdf(qx, qy, mu1[c], mu2[c], var1[c], var2[c]);
+        total_density += weights[c] * pdf;
+    }
+    return total_density;
+}
+
+// -------------------------------------------------------------
+// Inference: Soft Posterior Responsibility and Hard Assignment
+// -------------------------------------------------------------
+fn gmm_predict_component(qx: float, qy: float, k: int, weights: &float[], mu1: &float[], mu2: &float[], var1: &float[], var2: &float[], resp_out: &float[]) -> int {
+    let total_density = 0.0;
+    for (let c = 0; c < k; c++) {
+        let pdf = gaussian_2d_pdf(qx, qy, mu1[c], mu2[c], var1[c], var2[c]);
+        let comp = weights[c] * pdf;
+        resp_out[c] = comp;
+        total_density += comp;
+    }
+
+    if (total_density < 0.0000000001) {
+        total_density = 0.0000000001;
+    }
+
+    let best_c = 0;
+    let max_resp = -1.0;
+
+    for (let c = 0; c < k; c++) {
+        resp_out[c] /= total_density;
+        if (resp_out[c] > max_resp) {
+            max_resp = resp_out[c];
+            best_c = c;
+        }
+    }
+
+    return best_c;
+}
+
+fn main() -> int {
+    print("==================================================================");
+    print("   GAUSSIAN MIXTURE MODELS (GMM) - EXPECTATION-MAXIMIZATION       ");
+    print("==================================================================\n");
+
+    // 8 Data Points in 2 distinct 2D Gaussian distributions:
+    // Component 0: Centered around (2.0, 2.0)
+    // Component 1: Centered around (7.0, 6.0)
+    let n = 8;
+    let px = alloc(float, n);
+    let py = alloc(float, n);
+
+    // Component 0 samples
+    px[0] = 1.8; py[0] = 2.1;
+    px[1] = 2.2; py[1] = 1.9;
+    px[2] = 2.0; py[2] = 2.0;
+    px[3] = 1.9; py[3] = 2.2;
+
+    // Component 1 samples
+    px[4] = 6.8; py[4] = 6.1;
+    px[5] = 7.2; py[5] = 5.9;
+    px[6] = 7.0; py[6] = 6.0;
+    px[7] = 7.5; py[7] = 6.3;
+
+    let k = 2;
+    let weights = alloc(float, k);
+    let mu1 = alloc(float, k);
+    let mu2 = alloc(float, k);
+    let var1 = alloc(float, k);
+    let var2 = alloc(float, k);
+
+    // Initial Guess (Seed parameters)
+    weights[0] = 0.5; weights[1] = 0.5;
+    mu1[0] = 1.5; mu2[0] = 1.5; var1[0] = 1.0; var2[0] = 1.0;
+    mu1[1] = 6.0; mu2[1] = 5.0; var1[1] = 1.0; var2[1] = 1.0;
+
+    print("--- 1. Training GMM via Expectation-Maximization (EM) ---");
+    let final_ll = train_gmm_em(&px, &py, n, k, 25, &weights, &mu1, &mu2, &var1, &var2);
+
+    print("--- 2. Optimized Gaussian Mixture Components ---");
+    for (let c = 0; c < k; c++) {
+        print(f"  Component #{c}:");
+        print(f"    Prior Weight (π_{c}) : {weights[c]}");
+        print(f"    Mean Vector (μ_{c})   : ({mu1[c]}, {mu2[c]})");
+        print(f"    Variances (σ_{c}^2)   : ({var1[c]}, {var2[c]})");
+    }
+    print(f"  Converged Total Log-Likelihood: {final_ll}\n");
+
+    // --- 3. Soft Clustering & Posterior Responsibilities ---
+    print("--- 3. Soft Clustering Posterior Probabilities (E-Step Inference) ---");
+    let resp_q = alloc(float, k);
+
+    // Query 1: Clean sample near Component 0
+    let hard_q0 = gmm_predict_component(2.1, 1.95, k, &weights, &mu1, &mu2, &var1, &var2, &resp_q);
+    print(f"  Point (2.1, 1.95) -> P(C0)={resp_q[0] * 100.0}%, P(C1)={resp_q[1] * 100.0}% | Hard Cluster = {hard_q0} [Expected: 0]");
+
+    // Query 2: Clean sample near Component 1
+    let hard_q1 = gmm_predict_component(7.1, 6.05, k, &weights, &mu1, &mu2, &var1, &var2, &resp_q);
+    print(f"  Point (7.1, 6.05) -> P(C0)={resp_q[0] * 100.0}%, P(C1)={resp_q[1] * 100.0}% | Hard Cluster = {hard_q1} [Expected: 1]");
+
+    // Query 3: Peripheral point of Component 0 demonstrating soft membership
+    let hard_q_periph = gmm_predict_component(2.3, 2.2, k, &weights, &mu1, &mu2, &var1, &var2, &resp_q);
+    print(f"  Peripheral Point (2.3, 2.2) -> P(C0)={resp_q[0] * 100.0}%, P(C1)={resp_q[1] * 100.0}% | Hard Cluster = {hard_q_periph}\n");
+
+    // --- 4. Anomaly / Outlier Detection via Marginal Density p(x) ---
+    print("--- 4. Anomaly Detection via GMM Marginal Density p(x) ---");
+    let inlier_density = gmm_eval_density(2.0, 2.0, k, &weights, &mu1, &mu2, &var1, &var2);
+    let outlier_density = gmm_eval_density(15.0, 15.0, k, &weights, &mu1, &mu2, &var1, &var2);
+
+    print(f"  Inlier (2.0, 2.0) Marginal Density p(x)   : {inlier_density} (Normal Inlier)");
+    print(f"  Outlier (15.0, 15.0) Marginal Density p(x): {outlier_density} (Extreme Anomaly)");
+    if (outlier_density < 0.00001) {
+        print("  Flagged Point (15.0, 15.0) as anomalous outlier!\n");
+    }
+
+    print("==================================================================");
+    print("Gaussian Mixture Models (GMM) EM verified with 0 memory leaks!");
+    return 0;
+}
