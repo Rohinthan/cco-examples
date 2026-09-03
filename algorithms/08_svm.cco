@@ -45,29 +45,29 @@ struct SVMModel {
 fn tanh_approx(u: float) -> float {
     if (u > 10.0) { return 1.0; }
     if (u < -10.0) { return -1.0; }
-    let e2u: float = exp(2.0 * u);
+    let e2u = exp(2.0 * u);
     return (e2u - 1.0) / (e2u + 1.0);
 }
 
 fn eval_kernel(k_type: int, x1_a: float, x2_a: float, x1_b: float, x2_b: float, gamma: float, coef0: float, deg: int) -> float {
-    let dot: float = x1_a * x1_b + x2_a * x2_b;
+    let dot = x1_a * x1_b + x2_a * x2_b;
 
     if (k_type == 0) {
         // Linear Kernel
         return dot;
     } else if (k_type == 1) {
         // Polynomial Kernel
-        let base: float = gamma * dot + coef0;
+        let base = gamma * dot + coef0;
         return pow(base, 1.0 * deg);
     } else if (k_type == 2) {
         // RBF / Gaussian Kernel
-        let d1: float = x1_a - x1_b;
-        let d2: float = x2_a - x2_b;
-        let dist_sq: float = d1 * d1 + d2 * d2;
+        let d1 = x1_a - x1_b;
+        let d2 = x2_a - x2_b;
+        let dist_sq = d1 * d1 + d2 * d2;
         return exp(-gamma * dist_sq);
     } else {
         // Sigmoid Kernel
-        let u: float = gamma * dot + coef0;
+        let u = gamma * dot + coef0;
         return tanh_approx(u);
     }
 }
@@ -76,10 +76,10 @@ fn eval_kernel(k_type: int, x1_a: float, x2_a: float, x1_b: float, x2_b: float, 
 // Simplified Sequential Minimal Optimization (SMO) Solver
 // -------------------------------------------------------------
 fn compute_f(alphas: &float[], y: &int[], x1: &float[], x2: &float[], n: int, q_x1: float, q_x2: float, b: float, k_type: int, gamma: float, coef0: float, deg: int) -> float {
-    let sum: float = 0.0;
+    let sum = 0.0;
     for (let i = 0; i < n; i++) {
         if (alphas[i] > 0.00001) {
-            let k_val: float = eval_kernel(k_type, x1[i], x2[i], q_x1, q_x2, gamma, coef0, deg);
+            let k_val = eval_kernel(k_type, x1[i], x2[i], q_x1, q_x2, gamma, coef0, deg);
             sum += alphas[i] * (1.0 * y[i]) * k_val;
         }
     }
@@ -91,69 +91,69 @@ fn train_svm_smo(x1: &float[], x2: &float[], y: &int[], n: int, C: float, tol: f
         alphas_out[i] = 0.0;
     }
 
-    let b: float = 0.0;
-    let passes: int = 0;
+    let b = 0.0;
+    let passes = 0;
 
     while (passes < max_passes) {
-        let num_changed_alphas: int = 0;
+        let num_changed_alphas = 0;
 
         for (let i = 0; i < n; i++) {
-            let f_i: float = compute_f(alphas_out, y, x1, x2, n, x1[i], x2[i], b, k_type, gamma, coef0, deg);
-            let E_i: float = f_i - (1.0 * y[i]);
-            let y_i: float = 1.0 * y[i];
+            let f_i = compute_f(alphas_out, y, x1, x2, n, x1[i], x2[i], b, k_type, gamma, coef0, deg);
+            let E_i = f_i - (1.0 * y[i]);
+            let y_i = 1.0 * y[i];
 
             if ((y_i * E_i < -tol && alphas_out[i] < C) || (y_i * E_i > tol && alphas_out[i] > 0.0)) {
                 // Select j != i (simple heuristic: (i + 1) % n)
-                let j: int = (i + 1) % n;
+                let j = (i + 1) % n;
                 if (j == i) { j = (i + 2) % n; }
 
-                let f_j: float = compute_f(alphas_out, y, x1, x2, n, x1[j], x2[j], b, k_type, gamma, coef0, deg);
-                let E_j: float = f_j - (1.0 * y[j]);
-                let y_j: float = 1.0 * y[j];
+                let f_j = compute_f(alphas_out, y, x1, x2, n, x1[j], x2[j], b, k_type, gamma, coef0, deg);
+                let E_j = f_j - (1.0 * y[j]);
+                let y_j = 1.0 * y[j];
 
-                let old_alpha_i: float = alphas_out[i];
-                let old_alpha_j: float = alphas_out[j];
+                let old_alpha_i = alphas_out[i];
+                let old_alpha_j = alphas_out[j];
 
                 // Compute clipping bounds [L, H]
-                let L: float = 0.0;
-                let H: float = 0.0;
+                let L = 0.0;
+                let H = 0.0;
                 if (y[i] != y[j]) {
-                    let diff: float = old_alpha_j - old_alpha_i;
+                    let diff = old_alpha_j - old_alpha_i;
                     if (diff > 0.0) { L = diff; } else { L = 0.0; }
-                    let sum_c: float = C + diff;
+                    let sum_c = C + diff;
                     if (C < sum_c) { H = C; } else { H = sum_c; }
                 } else {
-                    let sum_a: float = old_alpha_i + old_alpha_j;
-                    let diff_c: float = sum_a - C;
+                    let sum_a = old_alpha_i + old_alpha_j;
+                    let diff_c = sum_a - C;
                     if (diff_c > 0.0) { L = diff_c; } else { L = 0.0; }
                     if (C < sum_a) { H = C; } else { H = sum_a; }
                 }
 
                 if (L < H) {
                     // Compute kernel values and eta (second derivative)
-                    let k_ii: float = eval_kernel(k_type, x1[i], x2[i], x1[i], x2[i], gamma, coef0, deg);
-                    let k_jj: float = eval_kernel(k_type, x1[j], x2[j], x1[j], x2[j], gamma, coef0, deg);
-                    let k_ij: float = eval_kernel(k_type, x1[i], x2[i], x1[j], x2[j], gamma, coef0, deg);
-                    let eta: float = 2.0 * k_ij - k_ii - k_jj;
+                    let k_ii = eval_kernel(k_type, x1[i], x2[i], x1[i], x2[i], gamma, coef0, deg);
+                    let k_jj = eval_kernel(k_type, x1[j], x2[j], x1[j], x2[j], gamma, coef0, deg);
+                    let k_ij = eval_kernel(k_type, x1[i], x2[i], x1[j], x2[j], gamma, coef0, deg);
+                    let eta = 2.0 * k_ij - k_ii - k_jj;
 
                     if (eta < -0.00001) {
-                        let new_alpha_j: float = old_alpha_j - (y_j * (E_i - E_j)) / eta;
+                        let new_alpha_j = old_alpha_j - (y_j * (E_i - E_j)) / eta;
                         // Clip alpha_j
                         if (new_alpha_j > H) { new_alpha_j = H; }
                         if (new_alpha_j < L) { new_alpha_j = L; }
 
-                        let diff_j: float = new_alpha_j - old_alpha_j;
-                        let abs_diff: float = diff_j;
+                        let diff_j = new_alpha_j - old_alpha_j;
+                        let abs_diff = diff_j;
                         if (abs_diff < 0.0) { abs_diff = -abs_diff; }
 
                         if (abs_diff >= 0.00001) {
                             alphas_out[j] = new_alpha_j;
-                            let new_alpha_i: float = old_alpha_i + y_i * y_j * (old_alpha_j - new_alpha_j);
+                            let new_alpha_i = old_alpha_i + y_i * y_j * (old_alpha_j - new_alpha_j);
                             alphas_out[i] = new_alpha_i;
 
                             // Update threshold b
-                            let b1: float = b - E_i - y_i * (new_alpha_i - old_alpha_i) * k_ii - y_j * (new_alpha_j - old_alpha_j) * k_ij;
-                            let b2: float = b - E_j - y_i * (new_alpha_i - old_alpha_i) * k_ij - y_j * (new_alpha_j - old_alpha_j) * k_jj;
+                            let b1 = b - E_i - y_i * (new_alpha_i - old_alpha_i) * k_ii - y_j * (new_alpha_j - old_alpha_j) * k_ij;
+                            let b2 = b - E_j - y_i * (new_alpha_i - old_alpha_i) * k_ij - y_j * (new_alpha_j - old_alpha_j) * k_jj;
 
                             if (new_alpha_i > 0.0 && new_alpha_i < C) {
                                 b = b1;
@@ -163,7 +163,7 @@ fn train_svm_smo(x1: &float[], x2: &float[], y: &int[], n: int, C: float, tol: f
                                 b = (b1 + b2) / 2.0;
                             }
 
-                            num_changed_alphas = num_changed_alphas + 1;
+                            num_changed_alphas++;
                         }
                     }
                 }
@@ -171,7 +171,7 @@ fn train_svm_smo(x1: &float[], x2: &float[], y: &int[], n: int, C: float, tol: f
         }
 
         if (num_changed_alphas == 0) {
-            passes = passes + 1;
+            passes++;
         } else {
             passes = 0;
         }
@@ -181,7 +181,7 @@ fn train_svm_smo(x1: &float[], x2: &float[], y: &int[], n: int, C: float, tol: f
 }
 
 fn predict_svm(alphas: &float[], y: &int[], x1: &float[], x2: &float[], n: int, q_x1: float, q_x2: float, b: float, k_type: int, gamma: float, coef0: float, deg: int) -> int {
-    let score: float = compute_f(alphas, y, x1, x2, n, q_x1, q_x2, b, k_type, gamma, coef0, deg);
+    let score = compute_f(alphas, y, x1, x2, n, q_x1, q_x2, b, k_type, gamma, coef0, deg);
     if (score >= 0.0) {
         return 1;
     }
@@ -194,12 +194,11 @@ fn main() -> int {
     print("==================================================================\n");
 
     // --- TEST 1: LINEAR KERNEL (Linearly Separable Margin) ---
-    // Margin between Class -1 (left) and Class +1 (right)
-    let n_lin: int = 6;
-    let lx1: float[] = alloc(float, n_lin);
-    let lx2: float[] = alloc(float, n_lin);
-    let ly: int[] = alloc(int, n_lin);
-    let l_alphas: float[] = alloc(float, n_lin);
+    let n_lin = 6;
+    let lx1 = alloc(float, n_lin);
+    let lx2 = alloc(float, n_lin);
+    let ly = alloc(int, n_lin);
+    let l_alphas = alloc(float, n_lin);
 
     lx1[0] = 1.0; lx2[0] = 2.0; ly[0] = -1;
     lx1[1] = 2.0; lx2[1] = 1.0; ly[1] = -1;
@@ -210,31 +209,29 @@ fn main() -> int {
     lx1[5] = 5.5; lx2[5] = 4.5; ly[5] = 1;
 
     print("--- 1. Linear Kernel SVM: K(x, z) = x^T * z ---");
-    let b_lin: float = train_svm_smo(&lx1, &lx2, &ly, n_lin, 1.0, 0.001, 20, 0, 1.0, 0.0, 1, &l_alphas);
+    let b_lin = train_svm_smo(&lx1, &lx2, &ly, n_lin, 1.0, 0.001, 20, 0, 1.0, 0.0, 1, &l_alphas);
     print(f"  Optimized Margin Bias b : {b_lin}");
     print("  Support Vectors (alphas > 0):");
-    let sv_count: int = 0;
+    let sv_count = 0;
     for (let i = 0; i < n_lin; i++) {
         if (l_alphas[i] > 0.0001) {
             print(f"    Sample ({lx1[i]}, {lx2[i]}), y={ly[i]} -> alpha={l_alphas[i]}");
-            sv_count = sv_count + 1;
+            sv_count++;
         }
     }
     print(f"  Total Support Vectors Identified: {sv_count}");
 
-    let lp1: int = predict_svm(&l_alphas, &ly, &lx1, &lx2, n_lin, 1.2, 1.8, b_lin, 0, 1.0, 0.0, 1);
-    let lp2: int = predict_svm(&l_alphas, &ly, &lx1, &lx2, n_lin, 5.8, 5.2, b_lin, 0, 1.0, 0.0, 1);
+    let lp1 = predict_svm(&l_alphas, &ly, &lx1, &lx2, n_lin, 1.2, 1.8, b_lin, 0, 1.0, 0.0, 1);
+    let lp2 = predict_svm(&l_alphas, &ly, &lx1, &lx2, n_lin, 5.8, 5.2, b_lin, 0, 1.0, 0.0, 1);
     print(f"  Test Point (1.2, 1.8) -> Predicted Class: {lp1} (Expected: -1)");
     print(f"  Test Point (5.8, 5.2) -> Predicted Class: {lp2} (Expected: +1)\n");
 
     // --- TEST 2: RBF / GAUSSIAN KERNEL (Non-Linear Concentric Circles) ---
-    // Class +1: Inner Circle (radius <= 1.5)
-    // Class -1: Outer Ring (radius >= 3.0)
-    let n_rbf: int = 8;
-    let rx1: float[] = alloc(float, n_rbf);
-    let rx2: float[] = alloc(float, n_rbf);
-    let ry: int[] = alloc(int, n_rbf);
-    let r_alphas: float[] = alloc(float, n_rbf);
+    let n_rbf = 8;
+    let rx1 = alloc(float, n_rbf);
+    let rx2 = alloc(float, n_rbf);
+    let ry = alloc(int, n_rbf);
+    let r_alphas = alloc(float, n_rbf);
 
     // Inner points (radius ~ 1)
     rx1[0] = 0.0; rx2[0] = 0.0; ry[0] = 1;
@@ -249,25 +246,22 @@ fn main() -> int {
     rx1[7] = 0.0; rx2[7] = -4.0; ry[7] = -1;
 
     print("--- 2. RBF Kernel SVM: K(x, z) = exp(-γ * ||x - z||^2) ---");
-    let b_rbf: float = train_svm_smo(&rx1, &rx2, &ry, n_rbf, 5.0, 0.001, 25, 2, 0.5, 0.0, 1, &r_alphas);
+    let b_rbf = train_svm_smo(&rx1, &rx2, &ry, n_rbf, 5.0, 0.001, 25, 2, 0.5, 0.0, 1, &r_alphas);
     print(f"  Optimized RBF Bias b : {b_rbf}");
 
-    let rp_center: int = predict_svm(&r_alphas, &ry, &rx1, &rx2, n_rbf, 0.2, 0.1, b_rbf, 2, 0.5, 0.0, 1);
-    let rp_outer: int = predict_svm(&r_alphas, &ry, &rx1, &rx2, n_rbf, 3.5, 0.5, b_rbf, 2, 0.5, 0.0, 1);
+    let rp_center = predict_svm(&r_alphas, &ry, &rx1, &rx2, n_rbf, 0.2, 0.1, b_rbf, 2, 0.5, 0.0, 1);
+    let rp_outer = predict_svm(&r_alphas, &ry, &rx1, &rx2, n_rbf, 3.5, 0.5, b_rbf, 2, 0.5, 0.0, 1);
     print(f"  Inner Point (0.2, 0.1) -> Predicted Class: {rp_center} (Expected: +1 Inner)");
     print(f"  Outer Point (3.5, 0.5) -> Predicted Class: {rp_outer} (Expected: -1 Outer)\n");
 
     // --- TEST 3: POLYNOMIAL KERNEL ---
-    // K(x, z) = (γ * dot + c)^d (Quadratic boundary d=2)
     print("--- 3. Polynomial Kernel: K(x, z) = (γ * x^T*z + c)^2 ---");
-    let poly_val: float = eval_kernel(1, 1.0, 2.0, 3.0, 4.0, 0.5, 1.0, 2);
-    // dot = 1(3) + 2(4) = 11. (0.5 * 11 + 1.0)^2 = (5.5 + 1)^2 = 6.5^2 = 42.25
+    let poly_val = eval_kernel(1, 1.0, 2.0, 3.0, 4.0, 0.5, 1.0, 2);
     print(f"  Poly Kernel K((1,2), (3,4)) with d=2, γ=0.5, c=1.0 : {poly_val} (Expected: 42.25)\n");
 
     // --- TEST 4: SIGMOID (HYPERBOLIC TANGENT) KERNEL ---
     print("--- 4. Sigmoid Kernel: K(x, z) = tanh(γ * x^T*z + c) ---");
-    let sig_val: float = eval_kernel(3, 0.5, 0.5, 1.0, 1.0, 1.0, 0.0, 1);
-    // dot = 0.5 + 0.5 = 1.0. tanh(1.0) ~ 0.761594
+    let sig_val = eval_kernel(3, 0.5, 0.5, 1.0, 1.0, 1.0, 0.0, 1);
     print(f"  Sigmoid Kernel K((0.5,0.5), (1,1)) with γ=1.0, c=0.0 : {sig_val} (Expected: ~0.761594)\n");
 
     print("==================================================================");
