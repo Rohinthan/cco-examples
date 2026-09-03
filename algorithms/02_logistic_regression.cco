@@ -1,5 +1,30 @@
 // Algorithm 2: Logistic Regression (Binary Classification with Sigmoid & Multi-Class with Softmax)
 
+/*
+================================================================================
+                    LOGISTIC REGRESSION & SOFTMAX SUITE
+================================================================================
+
+1. Binary Logistic Regression:
+       Hypothesis:  ŷ = σ(z) = 1 / ( 1 + exp(-z) ),   where z = w^T * x + b
+       Binary Cross-Entropy Loss:
+           L(w, b) = - (1 / N) * Σ_{i=1}^N [ y_i * ln(ŷ_i) + (1 - y_i) * ln(1 - ŷ_i) ]
+       Gradient Descent Updates:
+           ∂L / ∂w = (1 / N) * Σ (ŷ_i - y_i) * x_i
+           ∂L / ∂b = (1 / N) * Σ (ŷ_i - y_i)
+
+2. Multinomial Logistic Regression (Softmax Classifier):
+       Softmax Probability for class k ∈ {1, ..., K}:
+           p_k(x) = exp(z_k) / Σ_{j=1}^K exp(z_j),   where z_k = w_k^T * x + b_k
+       Numerical Stability Shift:
+           p_k(x) = exp(z_k - max_j z_j) / Σ_{j=1}^K exp(z_j - max_j z_j)
+       Categorical Cross-Entropy Loss:
+           L(W, B) = - (1 / N) * Σ_{i=1}^N Σ_{k=1}^K y_{i, k} * ln(p_k(x_i))
+       Gradient:
+           ∂L / ∂w_k = (1 / N) * Σ_{i=1}^N (p_k(x_i) - y_{i, k}) * x_i
+================================================================================
+*/
+
 struct BinaryModel {
     w1: float;
     w2: float;
@@ -27,20 +52,20 @@ fn sigmoid(z: float) -> float {
 // 1. Binary Logistic Regression (Sigmoid + Binary Cross-Entropy)
 // -------------------------------------------------------------
 fn train_binary_logistic(x1: &float[], x2: &float[], y: &float[], n: int, lr: float, epochs: int) -> BinaryModel {
-    let w1: float = 0.0;
-    let w2: float = 0.0;
-    let b: float = 0.0;
-    let n_f: float = 1.0 * n;
+    let w1 = 0.0;
+    let w2 = 0.0;
+    let b = 0.0;
+    let n_f = 1.0 * n;
 
     for (let ep = 0; ep < epochs; ep++) {
-        let grad_w1: float = 0.0;
-        let grad_w2: float = 0.0;
-        let grad_b: float = 0.0;
+        let grad_w1 = 0.0;
+        let grad_w2 = 0.0;
+        let grad_b = 0.0;
 
         for (let i = 0; i < n; i++) {
-            let z: float = w1 * x1[i] + w2 * x2[i] + b;
-            let y_hat: float = sigmoid(z);
-            let err: float = y_hat - y[i];
+            let z = w1 * x1[i] + w2 * x2[i] + b;
+            let y_hat = sigmoid(z);
+            let err = y_hat - y[i];
 
             grad_w1 += err * x1[i];
             grad_w2 += err * x2[i];
@@ -53,26 +78,26 @@ fn train_binary_logistic(x1: &float[], x2: &float[], y: &float[], n: int, lr: fl
     }
 
     // Evaluate final loss and accuracy
-    let total_loss: float = 0.0;
-    let correct: int = 0;
-    let eps: float = 0.0000001;
+    let total_loss = 0.0;
+    let correct = 0;
+    let eps = 0.0000001;
 
     for (let i = 0; i < n; i++) {
-        let z: float = w1 * x1[i] + w2 * x2[i] + b;
-        let y_hat: float = sigmoid(z);
+        let z = w1 * x1[i] + w2 * x2[i] + b;
+        let y_hat = sigmoid(z);
         if (y_hat < eps) { y_hat = eps; }
         if (y_hat > 1.0 - eps) { y_hat = 1.0 - eps; }
 
-        let bce: float = -(y[i] * log(y_hat) + (1.0 - y[i]) * log(1.0 - y_hat));
+        let bce = -(y[i] * log(y_hat) + (1.0 - y[i]) * log(1.0 - y_hat));
         total_loss += bce;
 
-        let pred_class: float = 0.0;
+        let pred_class = 0.0;
         if (y_hat >= 0.5) { pred_class = 1.0; }
-        if (pred_class == y[i]) { correct = correct + 1; }
+        if (pred_class == y[i]) { correct++; }
     }
 
-    let avg_loss: float = total_loss / n_f;
-    let acc: float = (1.0 * correct) / n_f;
+    let avg_loss = total_loss / n_f;
+    let acc = (1.0 * correct) / n_f;
 
     return BinaryModel { w1: w1, w2: w2, bias: b, loss: avg_loss, accuracy: acc };
 }
@@ -85,47 +110,46 @@ fn predict_binary_prob(m: &BinaryModel, x1_val: float, x2_val: float) -> float {
 // 2. Multinomial Logistic Regression (Softmax + Cross-Entropy)
 // -------------------------------------------------------------
 fn train_multiclass_logistic(x1: &float[], x2: &float[], y: &int[], n: int, lr: float, epochs: int) -> MultiClassModel {
-    // 3 Classes (0, 1, 2), 2 Features
-    let w00: float = 0.0; let w01: float = 0.0; let b0: float = 0.0;
-    let w10: float = 0.0; let w11: float = 0.0; let b1: float = 0.0;
-    let w20: float = 0.0; let w21: float = 0.0; let b2: float = 0.0;
-    let n_f: float = 1.0 * n;
+    let w00 = 0.0; let w01 = 0.0; let b0 = 0.0;
+    let w10 = 0.0; let w11 = 0.0; let b1 = 0.0;
+    let w20 = 0.0; let w21 = 0.0; let b2 = 0.0;
+    let n_f = 1.0 * n;
 
     for (let ep = 0; ep < epochs; ep++) {
-        let gw00: float = 0.0; let gw01: float = 0.0; let gb0: float = 0.0;
-        let gw10: float = 0.0; let gw11: float = 0.0; let gb1: float = 0.0;
-        let gw20: float = 0.0; let gw21: float = 0.0; let gb2: float = 0.0;
+        let gw00 = 0.0; let gw01 = 0.0; let gb0 = 0.0;
+        let gw10 = 0.0; let gw11 = 0.0; let gb1 = 0.0;
+        let gw20 = 0.0; let gw21 = 0.0; let gb2 = 0.0;
 
         for (let i = 0; i < n; i++) {
-            let z0: float = w00 * x1[i] + w01 * x2[i] + b0;
-            let z1: float = w10 * x1[i] + w11 * x2[i] + b1;
-            let z2: float = w20 * x1[i] + w21 * x2[i] + b2;
+            let z0 = w00 * x1[i] + w01 * x2[i] + b0;
+            let z1 = w10 * x1[i] + w11 * x2[i] + b1;
+            let z2 = w20 * x1[i] + w21 * x2[i] + b2;
 
             // Numerically stable Softmax
-            let max_z: float = z0;
+            let max_z = z0;
             if (z1 > max_z) { max_z = z1; }
             if (z2 > max_z) { max_z = z2; }
 
-            let exp0: float = exp(z0 - max_z);
-            let exp1: float = exp(z1 - max_z);
-            let exp2: float = exp(z2 - max_z);
-            let sum_exp: float = exp0 + exp1 + exp2;
+            let exp0 = exp(z0 - max_z);
+            let exp1 = exp(z1 - max_z);
+            let exp2 = exp(z2 - max_z);
+            let sum_exp = exp0 + exp1 + exp2;
 
-            let p0: float = exp0 / sum_exp;
-            let p1: float = exp1 / sum_exp;
-            let p2: float = exp2 / sum_exp;
+            let p0 = exp0 / sum_exp;
+            let p1 = exp1 / sum_exp;
+            let p2 = exp2 / sum_exp;
 
             // One-hot target comparison
-            let target0: float = 0.0;
-            let target1: float = 0.0;
-            let target2: float = 0.0;
+            let target0 = 0.0;
+            let target1 = 0.0;
+            let target2 = 0.0;
             if (y[i] == 0) { target0 = 1.0; }
             else if (y[i] == 1) { target1 = 1.0; }
             else { target2 = 1.0; }
 
-            let err0: float = p0 - target0;
-            let err1: float = p1 - target1;
-            let err2: float = p2 - target2;
+            let err0 = p0 - target0;
+            let err1 = p1 - target1;
+            let err2 = p2 - target2;
 
             gw00 += err0 * x1[i]; gw01 += err0 * x2[i]; gb0 += err0;
             gw10 += err1 * x1[i]; gw11 += err1 * x2[i]; gb1 += err1;
@@ -138,43 +162,43 @@ fn train_multiclass_logistic(x1: &float[], x2: &float[], y: &int[], n: int, lr: 
     }
 
     // Evaluate final categorical cross-entropy and accuracy
-    let total_loss: float = 0.0;
-    let correct: int = 0;
-    let eps: float = 0.0000001;
+    let total_loss = 0.0;
+    let correct = 0;
+    let eps = 0.0000001;
 
     for (let i = 0; i < n; i++) {
-        let z0: float = w00 * x1[i] + w01 * x2[i] + b0;
-        let z1: float = w10 * x1[i] + w11 * x2[i] + b1;
-        let z2: float = w20 * x1[i] + w21 * x2[i] + b2;
+        let z0 = w00 * x1[i] + w01 * x2[i] + b0;
+        let z1 = w10 * x1[i] + w11 * x2[i] + b1;
+        let z2 = w20 * x1[i] + w21 * x2[i] + b2;
 
-        let max_z: float = z0;
+        let max_z = z0;
         if (z1 > max_z) { max_z = z1; }
         if (z2 > max_z) { max_z = z2; }
 
-        let exp0: float = exp(z0 - max_z);
-        let exp1: float = exp(z1 - max_z);
-        let exp2: float = exp(z2 - max_z);
-        let sum_exp: float = exp0 + exp1 + exp2;
+        let exp0 = exp(z0 - max_z);
+        let exp1 = exp(z1 - max_z);
+        let exp2 = exp(z2 - max_z);
+        let sum_exp = exp0 + exp1 + exp2;
 
-        let p0: float = exp0 / sum_exp;
-        let p1: float = exp1 / sum_exp;
-        let p2: float = exp2 / sum_exp;
+        let p0 = exp0 / sum_exp;
+        let p1 = exp1 / sum_exp;
+        let p2 = exp2 / sum_exp;
 
         // Argmax prediction
-        let pred_class: int = 0;
-        let max_p: float = p0;
+        let pred_class = 0;
+        let max_p = p0;
         if (p1 > max_p) { max_p = p1; pred_class = 1; }
         if (p2 > max_p) { max_p = p2; pred_class = 2; }
 
-        if (pred_class == y[i]) { correct = correct + 1; }
+        if (pred_class == y[i]) { correct++; }
 
         if (y[i] == 0) { total_loss -= log(p0 + eps); }
         else if (y[i] == 1) { total_loss -= log(p1 + eps); }
         else { total_loss -= log(p2 + eps); }
     }
 
-    let avg_loss: float = total_loss / n_f;
-    let acc: float = (1.0 * correct) / n_f;
+    let avg_loss = total_loss / n_f;
+    let acc = (1.0 * correct) / n_f;
 
     return MultiClassModel {
         w00: w00, w01: w01, b0: b0,
@@ -186,12 +210,12 @@ fn train_multiclass_logistic(x1: &float[], x2: &float[], y: &int[], n: int, lr: 
 }
 
 fn predict_multiclass_class(m: &MultiClassModel, x1_val: float, x2_val: float) -> int {
-    let z0: float = m.w00 * x1_val + m.w01 * x2_val + m.b0;
-    let z1: float = m.w10 * x1_val + m.w11 * x2_val + m.b1;
-    let z2: float = m.w20 * x1_val + m.w21 * x2_val + m.b2;
+    let z0 = m.w00 * x1_val + m.w01 * x2_val + m.b0;
+    let z1 = m.w10 * x1_val + m.w11 * x2_val + m.b1;
+    let z2 = m.w20 * x1_val + m.w21 * x2_val + m.b2;
 
-    let best_class: int = 0;
-    let best_z: float = z0;
+    let best_class = 0;
+    let best_z = z0;
     if (z1 > best_z) { best_z = z1; best_class = 1; }
     if (z2 > best_z) { best_z = z2; best_class = 2; }
     return best_class;
@@ -202,12 +226,11 @@ fn main() -> int {
     print("   LOGISTIC REGRESSION & SOFTMAX CLASSIFICATION SUITE (Cco-v20)   ");
     print("==================================================================\n");
 
-    // --- PART 1: BINARY LOGISTIC REGRESSION (Pass / Fail Exam Predictor) ---
-    // Features: [Hours Studied, Attendance % / 100], Label: [0 = Fail, 1 = Pass]
-    let n_bin: int = 8;
-    let bx1: float[] = alloc(float, n_bin);
-    let bx2: float[] = alloc(float, n_bin);
-    let by: float[] = alloc(float, n_bin);
+    // --- PART 1: BINARY LOGISTIC REGRESSION ---
+    let n_bin = 8;
+    let bx1 = alloc(float, n_bin);
+    let bx2 = alloc(float, n_bin);
+    let by = alloc(float, n_bin);
 
     // Fail samples
     bx1[0] = 1.0; bx2[0] = 0.50; by[0] = 0.0;
@@ -221,48 +244,45 @@ fn main() -> int {
     bx1[7] = 9.0; bx2[7] = 0.95; by[7] = 1.0;
 
     print("--- 1. Training Binary Logistic Regression (Sigmoid) ---");
-    let bin_model: BinaryModel = train_binary_logistic(&bx1, &bx2, &by, n_bin, 0.1, 3000);
+    let bin_model = train_binary_logistic(&bx1, &bx2, &by, n_bin, 0.1, 3000);
     print(f"  Trained Decision Weights : w1={bin_model.w1}, w2={bin_model.w2}, bias={bin_model.bias}");
     print(f"  Binary Cross-Entropy Loss: {bin_model.loss}");
     print(f"  Training Accuracy        : {bin_model.accuracy * 100.0}%\n");
 
-    // Test Predictions
-    let prob_fail_student: float = predict_binary_prob(&bin_model, 1.5, 0.55);
-    let prob_pass_student: float = predict_binary_prob(&bin_model, 8.5, 0.92);
+    let prob_fail_student = predict_binary_prob(&bin_model, 1.5, 0.55);
+    let prob_pass_student = predict_binary_prob(&bin_model, 8.5, 0.92);
     print(f"  Student [1.5 hrs, 55% att] -> Pass Probability = {prob_fail_student * 100.0}% (Predicted: Fail)");
     print(f"  Student [8.5 hrs, 92% att] -> Pass Probability = {prob_pass_student * 100.0}% (Predicted: Pass)\n");
 
-    // --- PART 2: MULTINOMIAL LOGISTIC REGRESSION (3-Class Softmax Classifier) ---
-    // 3 Iris-like Clusters: Class 0, Class 1, Class 2
-    let n_mc: int = 9;
-    let mx1: float[] = alloc(float, n_mc);
-    let mx2: float[] = alloc(float, n_mc);
-    let my: int[] = alloc(int, n_mc);
+    // --- PART 2: MULTINOMIAL LOGISTIC REGRESSION ---
+    let n_mc = 9;
+    let mx1 = alloc(float, n_mc);
+    let mx2 = alloc(float, n_mc);
+    let my = alloc(int, n_mc);
 
-    // Class 0: Low x1, Low x2
+    // Class 0
     mx1[0] = 1.0; mx2[0] = 1.2; my[0] = 0;
     mx1[1] = 1.5; mx2[1] = 1.8; my[1] = 0;
     mx1[2] = 2.0; mx2[2] = 1.0; my[2] = 0;
 
-    // Class 1: Medium x1, High x2
+    // Class 1
     mx1[3] = 4.0; mx2[3] = 8.0; my[3] = 1;
     mx1[4] = 4.5; mx2[4] = 8.5; my[4] = 1;
     mx1[5] = 5.0; mx2[5] = 7.8; my[5] = 1;
 
-    // Class 2: High x1, Low x2
+    // Class 2
     mx1[6] = 8.0; mx2[6] = 2.0; my[6] = 2;
     mx1[7] = 8.5; mx2[7] = 2.5; my[7] = 2;
     mx1[8] = 9.0; mx2[8] = 1.5; my[8] = 2;
 
     print("--- 2. Training Multinomial Logistic Regression (Softmax) ---");
-    let mc_model: MultiClassModel = train_multiclass_logistic(&mx1, &mx2, &my, n_mc, 0.05, 4000);
+    let mc_model = train_multiclass_logistic(&mx1, &mx2, &my, n_mc, 0.05, 4000);
     print(f"  Categorical Cross-Entropy Loss : {mc_model.loss}");
     print(f"  Training Accuracy              : {mc_model.accuracy * 100.0}%\n");
 
-    // Multi-class Predictions
-    let test_c0: int = predict_multiclass_class(&mc_model, 1.2, 1.4);
-    let test_c1: int = predict_multiclass_class(&mc_model, 4.8, 8.2);
-    let test_c2: int = predict_multiclass_class(&mc_model, 8.8, 2.1);
+    let test_c0 = predict_multiclass_class(&mc_model, 1.2, 1.4);
+    let test_c1 = predict_multiclass_class(&mc_model, 4.8, 8.2);
+    let test_c2 = predict_multiclass_class(&mc_model, 8.8, 2.1);
 
     print(f"  Sample [1.2, 1.4] -> Predicted Class = {test_c0} (Expected: 0)");
     print(f"  Sample [4.8, 8.2] -> Predicted Class = {test_c1} (Expected: 1)");
