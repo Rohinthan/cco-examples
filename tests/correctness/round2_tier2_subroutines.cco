@@ -1,0 +1,260 @@
+// Round 2 Mathematical Subroutines Isolation Test in Cco
+
+fn sigmoid_fn(z: float) -> float {
+    if (z > 15.0) { return 1.0; }
+    if (z < -15.0) { return 0.0; }
+    return 1.0 / (1.0 + exp(-z));
+}
+
+fn tanh_fn(u: float) -> float {
+    if (u > 10.0) { return 1.0; }
+    if (u < -10.0) { return -1.0; }
+    let ep = exp(u);
+    let em = exp(-u);
+    return (ep - em) / (ep + em);
+}
+
+// -------------------------------------------------------------
+// 1. CNN 2D Cross-Correlation / Convolution (from 26_cnn.cco)
+// -------------------------------------------------------------
+fn test_cnn_conv2d() -> void {
+    let h = 4; let w = 4;
+    let kh = 2; let kw = 2;
+    let bias = 0.5;
+
+    let img = alloc(float, 16);
+    img[0]  = 1.0; img[1]  = 2.0; img[2]  = 3.0; img[3]  = 0.0;
+    img[4]  = 0.0; img[5]  = 1.0; img[6]  = 2.0; img[7]  = 3.0;
+    img[8]  = 3.0; img[9]  = 0.0; img[10] = 1.0; img[11] = 2.0;
+    img[12] = 2.0; img[13] = 3.0; img[14] = 0.0; img[15] = 1.0;
+
+    let kernel = alloc(float, 4);
+    kernel[0] = 1.0; kernel[1] =  0.0;
+    kernel[2] = 0.0; kernel[3] = -1.0;
+
+    let out_h = h - kh + 1; // 3
+    let out_w = w - kw + 1; // 3
+    let out_map = alloc(float, out_h * out_w);
+
+    for (let i = 0; i < out_h; i++) {
+        for (let j = 0; j < out_w; j++) {
+            let sum = bias;
+            for (let ki = 0; ki < kh; ki++) {
+                for (let kj = 0; kj < kw; kj++) {
+                    let pixel = img[(i + ki) * w + (j + kj)];
+                    let weight = kernel[ki * kw + kj];
+                    sum += pixel * weight;
+                }
+            }
+            out_map[i * out_w + j] = sum;
+        }
+    }
+
+    print("=== TIER 2: CNN 2D CONVOLUTION ===");
+    for (let i = 0; i < out_h; i++) {
+        print(f"Row {i}: [{out_map[i * 3 + 0]}, {out_map[i * 3 + 1]}, {out_map[i * 3 + 2]}]");
+    }
+}
+
+// -------------------------------------------------------------
+// 2. MLP Backprop vs Numerical Gradient (from 25_mlp.cco)
+// -------------------------------------------------------------
+fn compute_mlp_loss(x0: float, x1: float, y: float,
+                    w1: &float[], b1: &float[],
+                    w2: &float[], b2: float) -> float {
+    // Hidden layer
+    let z1_0 = w1[0] * x0 + w1[1] * x1 + b1[0];
+    let z1_1 = w1[2] * x0 + w1[3] * x1 + b1[1];
+    let a1_0 = sigmoid_fn(z1_0);
+    let a1_1 = sigmoid_fn(z1_1);
+
+    // Output layer
+    let z2 = w2[0] * a1_0 + w2[1] * a1_1 + b2;
+    let a2 = sigmoid_fn(z2);
+
+    let p = a2;
+    if (p < 0.000001) { p = 0.000001; }
+    if (p > 0.999999) { p = 0.999999; }
+    return -(y * log(p) + (1.0 - y) * log(1.0 - p));
+}
+
+fn test_mlp_gradient_check() -> void {
+    let x0 = 0.8; let x1 = -0.5; let y = 1.0;
+
+    let w1 = alloc(float, 4); let b1 = alloc(float, 2);
+    let w2 = alloc(float, 2); let b2 = 0.3;
+
+    w1[0] =  0.5; w1[1] = -0.4; b1[0] =  0.1;
+    w1[2] =  0.2; w1[3] =  0.7; b1[1] = -0.2;
+    w2[0] =  0.6; w2[1] = -0.8;
+
+    // 1. Analytical Backprop Gradient for w2[0]
+    let z1_0 = w1[0] * x0 + w1[1] * x1 + b1[0];
+    let a1_0 = sigmoid_fn(z1_0);
+    let z1_1 = w1[2] * x0 + w1[3] * x1 + b1[1];
+    let a1_1 = sigmoid_fn(z1_1);
+
+    let z2 = w2[0] * a1_0 + w2[1] * a1_1 + b2;
+    let y_hat = sigmoid_fn(z2);
+
+    let delta2 = y_hat - y; // dL/dz2 for sigmoid + BCE
+    let grad_analytic = delta2 * a1_0; // dL/dw2[0]
+
+    // 2. Numerical Gradient via Finite Differences: (J(w + eps) - J(w - eps)) / (2 * eps)
+    let eps = 0.0001;
+    w2[0] += eps;
+    let loss_plus = compute_mlp_loss(x0, x1, y, &w1, &b1, &w2, b2);
+    w2[0] -= 2.0 * eps;
+    let loss_minus = compute_mlp_loss(x0, x1, y, &w1, &b1, &w2, b2);
+    w2[0] += eps; // restore
+
+    let grad_numeric = (loss_plus - loss_minus) / (2.0 * eps);
+
+    let diff = grad_analytic - grad_numeric;
+    if (diff < 0.0) { diff = -diff; }
+
+    print("\n=== TIER 2: MLP GRADIENT CHECK ===");
+    print(f"y_hat: {y_hat}");
+    print(f"Analytic  dL/dw2[0]: {grad_analytic}");
+    print(f"Numerical dL/dw2[0]: {grad_numeric}");
+    print(f"Absolute Difference: {diff}");
+}
+
+// -------------------------------------------------------------
+// 3. RNN Hidden-State Forward Update (from 27_rnn.cco)
+// -------------------------------------------------------------
+fn test_rnn_forward_step() -> void {
+    let xt = 0.7;
+    let prev_h0 = 0.3; let prev_h1 = -0.4;
+
+    let z0 = 0.5 * xt + 0.4 * prev_h0 - 0.1 * prev_h1 + 0.1;
+    let z1 = -0.2 * xt + 0.2 * prev_h0 + 0.3 * prev_h1 + 0.0;
+
+    let h0 = tanh_fn(z0);
+    let h1 = tanh_fn(z1);
+
+    print("\n=== TIER 2: RNN FORWARD UPDATE ===");
+    print(f"z: [{z0}, {z1}]");
+    print(f"h_t: [{h0}, {h1}]");
+}
+
+// -------------------------------------------------------------
+// 4. GRU Forward Gating Step (from 29_gru.cco)
+// -------------------------------------------------------------
+fn test_gru_forward_step() -> void {
+    let xt = 0.6;
+    let prev_h0 = 0.5; let prev_h1 = -0.2;
+
+    // Update Gate z_t
+    let z_in0 = 0.4 * xt + 0.2 * prev_h0 + 0.1 * prev_h1 + 0.1;
+    let z_in1 = -0.3 * xt - 0.1 * prev_h0 + 0.3 * prev_h1 + 0.0;
+    let z0 = sigmoid_fn(z_in0);
+    let z1 = sigmoid_fn(z_in1);
+
+    // Reset Gate r_t
+    let r_in0 = -0.2 * xt + 0.3 * prev_h0 - 0.2 * prev_h1 + 0.0;
+    let r_in1 = 0.5 * xt + 0.1 * prev_h0 + 0.2 * prev_h1 + 0.1;
+    let r0 = sigmoid_fn(r_in0);
+    let r1 = sigmoid_fn(r_in1);
+
+    // Candidate Hidden State h̃_t
+    let reset_h0 = r0 * prev_h0;
+    let reset_h1 = r1 * prev_h1;
+    let h_in0 = 0.5 * xt - 0.2 * reset_h0 + 0.4 * reset_h1 + 0.1;
+    let h_in1 = 0.2 * xt + 0.3 * reset_h0 - 0.1 * reset_h1 - 0.1;
+    let h_tilde0 = tanh_fn(h_in0);
+    let h_tilde1 = tanh_fn(h_in1);
+
+    // Output Hidden State h_t = (1 - z) * h_{t-1} + z * h̃
+    let h0 = (1.0 - z0) * prev_h0 + z0 * h_tilde0;
+    let h1 = (1.0 - z1) * prev_h1 + z1 * h_tilde1;
+
+    print("\n=== TIER 2: GRU FORWARD CELL ===");
+    print(f"Update Gate z: [{z0}, {z1}]");
+    print(f"Reset Gate  r: [{r0}, {r1}]");
+    print(f"Candidate   h̃: [{h_tilde0}, {h_tilde1}]");
+    print(f"Hidden State h: [{h0}, {h1}]");
+}
+
+// -------------------------------------------------------------
+// 5. Autoencoder Encode-Decode (from 30_autoencoder.cco)
+// -------------------------------------------------------------
+fn test_autoencoder_reconstruction() -> void {
+    let x = alloc(float, 4);
+    x[0] = 0.5; x[1] = 0.8; x[2] = -0.2; x[3] = 0.1;
+
+    // Encoder: z = sigmoid(W_e * x + b_e)
+    let sum_e0 = 0.1 + 0.3 * x[0] + 0.5 * x[1] - 0.2 * x[2] + 0.4 * x[3];
+    let sum_e1 = -0.1 - 0.1 * x[0] + 0.4 * x[1] + 0.6 * x[2] - 0.3 * x[3];
+    let z0 = sigmoid_fn(sum_e0);
+    let z1 = sigmoid_fn(sum_e1);
+
+    // Decoder: x̂ = W_d * z + b_d
+    let r0 = 0.0 + 0.4 * z0 - 0.2 * z1;
+    let r1 = 0.1 + 0.5 * z0 + 0.3 * z1;
+    let r2 = -0.1 - 0.3 * z0 + 0.6 * z1;
+    let r3 = 0.2 + 0.2 * z0 - 0.4 * z1;
+
+    print("\n=== TIER 2: AUTOENCODER RECONSTRUCTION ===");
+    print(f"Latent z: [{z0}, {z1}]");
+    print(f"Reconstruction x̂: [{r0}, {r1}, {r2}, {r3}]");
+}
+
+// -------------------------------------------------------------
+// 6. Mixture of Experts Top-2 Gating (from 38_mixture_of_experts.cco)
+// -------------------------------------------------------------
+fn test_moe_top2_routing() -> void {
+    // x: [1.0, -0.5, 0.8, 0.2]
+    // Logits: H(x) = x * W_g
+    let l0 = 1.0 *  0.8 - 0.5 *  0.1 + 0.8 * -0.4 + 0.2 *  0.2; // 0.8 - 0.05 - 0.32 + 0.04 = 0.47
+    let l1 = 1.0 *  0.2 - 0.5 *  0.9 + 0.8 *  0.1 + 0.2 * -0.2; // 0.2 - 0.45 + 0.08 - 0.04 = -0.21
+    let l2 = 1.0 * -0.5 - 0.5 *  0.2 + 0.8 *  0.7 + 0.2 *  0.3; // -0.5 - 0.10 + 0.56 + 0.06 = 0.02
+    let l3 = 1.0 *  0.1 - 0.5 * -0.3 + 0.8 *  0.5 + 0.2 *  0.6; // 0.1 + 0.15 + 0.40 + 0.12 = 0.77
+
+    // Top-2: Expert 3 (0.77) and Expert 0 (0.47)
+    let best_idx = 3; let second_idx = 0;
+    let best_val = l3; let second_val = l0;
+
+    let e_max = best_val;
+    let e0 = exp(best_val - e_max);
+    let e1 = exp(second_val - e_max);
+    let sum_e = e0 + e1;
+
+    let w0 = e0 / sum_e;
+    let w1 = e1 / sum_e;
+
+    print("\n=== TIER 2: MIXTURE OF EXPERTS TOP-2 GATING ===");
+    print(f"Logits: [{l0}, {l1}, {l2}, {l3}]");
+    print(f"Top-2 Selected Experts: [{best_idx}, {second_idx}]");
+    print(f"Top-2 Normalized Weights: [{w0}, {w1}]");
+}
+
+// -------------------------------------------------------------
+// 7. Q-Learning Bellman Update (from 59_q_learning_sarsa.cco)
+// -------------------------------------------------------------
+fn test_q_learning_bellman() -> void {
+    let curr_q = 4.5;
+    let reward = -1.0;
+    let gamma = 0.9;
+    let alpha = 0.2;
+    let max_next_q = 6.0;
+
+    let td_target = reward + gamma * max_next_q;
+    let new_q = curr_q + alpha * (td_target - curr_q);
+
+    print("\n=== TIER 2: Q-LEARNING BELLMAN UPDATE ===");
+    print(f"Current Q(s, a): {curr_q}");
+    print(f"TD Target      : {td_target}");
+    print(f"Updated Q(s, a): {new_q}");
+}
+
+fn main() -> int {
+    test_cnn_conv2d();
+    test_mlp_gradient_check();
+    test_rnn_forward_step();
+    test_gru_forward_step();
+    test_autoencoder_reconstruction();
+    test_moe_top2_routing();
+    test_q_learning_bellman();
+    return 0;
+}

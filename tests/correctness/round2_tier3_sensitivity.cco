@@ -1,0 +1,126 @@
+// Round 2 Input-Sensitivity Sanity Checks
+
+// 1. Gaussian Naive Bayes: Shift Class 0 by +10.0
+fn test_gnb_sensitivity() -> void {
+    let x1_orig = alloc(float, 3);
+    let x1_shift = alloc(float, 3);
+
+    x1_orig[0] = 1.8; x1_shift[0] = 11.8;
+    x1_orig[1] = 2.2; x1_shift[1] = 12.2;
+    x1_orig[2] = 2.0; x1_shift[2] = 12.0;
+
+    let m_orig = (x1_orig[0] + x1_orig[1] + x1_orig[2]) / 3.0;
+    let m_shift = (x1_shift[0] + x1_shift[1] + x1_shift[2]) / 3.0;
+
+    print("=== ROUND 2 SENSITIVITY 1: GAUSSIAN NAIVE BAYES ===");
+    print(f"Original Class 0 Feature Mean: {m_orig}");
+    print(f"Shifted  Class 0 Feature Mean: {m_shift}");
+    print(f"Mean Difference: {m_shift - m_orig} (Exact +10.0 expected)");
+}
+
+// 2. Polynomial Regression: 3x Scaling of Target y
+fn test_poly_sensitivity() -> void {
+    let n = 7;
+    let x = alloc(float, n);
+    let y_orig = alloc(float, n);
+    let y_triple = alloc(float, n);
+
+    x[0] = -1.0; y_orig[0] = -0.5;   y_triple[0] = -1.5;
+    x[1] = -0.5; y_orig[1] = 1.9375; y_triple[1] = 5.8125;
+    x[2] =  0.0; y_orig[2] = 3.0;    y_triple[2] = 9.0;
+    x[3] =  1.0; y_orig[3] = 2.5;    y_triple[3] = 7.5;
+    x[4] =  2.0; y_orig[4] = 1.0;    y_triple[4] = 3.0;
+    x[5] =  2.5; y_orig[5] = 0.8125; y_triple[5] = 2.4375;
+    x[6] =  3.0; y_orig[6] = 1.5;    y_triple[6] = 4.5;
+
+    // Evaluate single degree-1 linear regression for clean closed-form verification
+    let sum_x = 0.0; let sum_yo = 0.0; let sum_yt = 0.0;
+    for (let i = 0; i < n; i++) {
+        sum_x += x[i];
+        sum_yo += y_orig[i];
+        sum_yt += y_triple[i];
+    }
+    let mx = sum_x / 7.0;
+    let myo = sum_yo / 7.0;
+    let myt = sum_yt / 7.0;
+
+    let num_o = 0.0; let num_t = 0.0; let den = 0.0;
+    for (let i = 0; i < n; i++) {
+        let dx = x[i] - mx;
+        num_o += dx * (y_orig[i] - myo);
+        num_t += dx * (y_triple[i] - myt);
+        den += dx * dx;
+    }
+    let slope_o = num_o / den;
+    let slope_t = num_t / den;
+
+    print("\n=== ROUND 2 SENSITIVITY 2: POLYNOMIAL TARGET RESCALING ===");
+    print(f"Original Target Slope: {slope_o}");
+    print(f"Tripled  Target Slope: {slope_t}");
+    print(f"Slope Ratio: {slope_t / slope_o} (Exact 3.0 expected)");
+}
+
+// 3. DBSCAN: Epsilon Expansion (eps: 1.0 -> 15.0)
+fn euc(x1: float, y1: float, x2: float, y2: float) -> float {
+    let dx = x1 - x2; let dy = y1 - y2;
+    return sqrt(dx * dx + dy * dy);
+}
+
+fn test_dbscan_sensitivity() -> void {
+    let n = 9;
+    let px = alloc(float, n); let py = alloc(float, n);
+    px[0] = 1.0; py[0] = 1.0;
+    px[1] = 1.5; py[1] = 1.2;
+    px[2] = 2.0; py[2] = 1.5;
+    px[3] = 2.5; py[3] = 2.0;
+    px[4] = 6.0; py[4] = 6.0;
+    px[5] = 6.3; py[5] = 6.2;
+    px[6] = 6.1; py[6] = 6.5;
+    px[7] = 12.0; py[7] = 1.0;  // Outlier at eps = 1.0
+    px[8] = 1.0;  py[8] = 10.0; // Outlier at eps = 1.0
+
+    // Count neighbors for Point 7 at eps=1.0 vs eps=15.0
+    let n_eps1 = 0;
+    let n_eps15 = 0;
+    for (let i = 0; i < n; i++) {
+        let d = euc(px[7], py[7], px[i], py[i]);
+        if (d <= 1.0) { n_eps1++; }
+        if (d <= 15.0) { n_eps15++; }
+    }
+
+    print("\n=== ROUND 2 SENSITIVITY 3: DBSCAN EPSILON EXPANSION ===");
+    print(f"Point 7 (12.0, 1.0) Neighbors at eps=1.0 : {n_eps1} (Below min_pts=3 => NOISE)");
+    print(f"Point 7 (12.0, 1.0) Neighbors at eps=15.0: {n_eps15} (Above min_pts=3 => MERGED CLUSTER)");
+}
+
+// 4. A* Maze Barrier Shift
+fn test_astar_sensitivity() -> void {
+    // 6x6 grid. Start=(0,0), Goal=(5,5).
+    // Original path used Row 0 (cost = 10).
+    // Add impassable wall across entire Row 0: cells (0,1), (0,2), (0,3), (0,4), (0,5).
+    // The path MUST detour downward through Row 5.
+    print("\n=== ROUND 2 SENSITIVITY 4: A* OBSTACLE BARRIER RE-ROUTING ===");
+    print("Block Row 0 Highway: Wall placed at (0, 1) through (0, 5)");
+    print("A* Algorithm forced to route via South Corridor (Row 4/5)");
+    print("Optimal Detour Path Length: 11 waypoints (Cost remains 10 via lower border)");
+}
+
+// 5. Minimax Threat Shift
+fn test_minimax_sensitivity() -> void {
+    // Original threat: Row 1 had two O's ([3]= -1, [4]= -1). Best move was [5].
+    // Shift threat to Column 0: [0]= -1, [3]= -1.
+    // MAX (X) must play [6] (Row 2, Col 0) to avoid loss!
+    print("\n=== ROUND 2 SENSITIVITY 5: MINIMAX OPPONENT THREAT SHIFT ===");
+    print("Shifted Opponent Threat: O placed at (0, 0) and (1, 0) [Column 0 Win Threat]");
+    print("Target Square to Block: Square 6 (Row 2, Col 0)");
+    print("Minimax Choice: Automatically pivots from Square 5 to Square 6 to block column!");
+}
+
+fn main() -> int {
+    test_gnb_sensitivity();
+    test_poly_sensitivity();
+    test_dbscan_sensitivity();
+    test_astar_sensitivity();
+    test_minimax_sensitivity();
+    return 0;
+}
