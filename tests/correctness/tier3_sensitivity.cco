@@ -1,0 +1,201 @@
+// Section 3: Input-Sensitivity Sanity Checks
+
+// 1. Linear Regression
+fn test_ols_sensitivity() -> void {
+    let n = 6;
+    let x = alloc(float, n);
+    let y_orig = alloc(float, n);
+    let y_double = alloc(float, n);
+
+    x[0] = 1.0; y_orig[0] = 3.6;  y_double[0] = 7.2;
+    x[1] = 2.0; y_orig[1] = 6.3;  y_double[1] = 12.6;
+    x[2] = 3.0; y_orig[2] = 8.7;  y_double[2] = 17.4;
+    x[3] = 4.0; y_orig[3] = 11.2; y_double[3] = 22.4;
+    x[4] = 5.0; y_orig[4] = 13.8; y_double[4] = 27.6;
+    x[5] = 6.0; y_orig[5] = 16.1; y_double[5] = 32.2;
+
+    let sum_x = 0.0; let sum_yo = 0.0; let sum_yd = 0.0;
+    for (let i = 0; i < n; i++) {
+        sum_x += x[i];
+        sum_yo += y_orig[i];
+        sum_yd += y_double[i];
+    }
+    let mx = sum_x / 6.0;
+    let myo = sum_yo / 6.0;
+    let myd = sum_yd / 6.0;
+
+    let num_o = 0.0; let num_d = 0.0; let den = 0.0;
+    for (let i = 0; i < n; i++) {
+        let dx = x[i] - mx;
+        num_o += dx * (y_orig[i] - myo);
+        num_d += dx * (y_double[i] - myd);
+        den += dx * dx;
+    }
+    let slope_o = num_o / den;
+    let b_o = myo - slope_o * mx;
+
+    let slope_d = num_d / den;
+    let b_d = myd - slope_d * mx;
+
+    print("=== SENSITIVITY CHECK 1: OLS LINEAR REGRESSION ===");
+    print(f"Original y -> Slope: {slope_o}, Intercept: {b_o}");
+    print(f"Doubled  y -> Slope: {slope_d}, Intercept: {b_d}");
+    print(f"Ratio (Doubled / Original) -> Slope Ratio: {slope_d / slope_o}, Intercept Ratio: {b_d / b_o}");
+}
+
+// 2. KNN Label Flip
+fn test_knn_sensitivity() -> void {
+    let n = 9;
+    let cx1 = alloc(float, n);
+    let cx2 = alloc(float, n);
+    let cy_orig = alloc(int, n);
+    let cy_flipped = alloc(int, n);
+
+    cx1[0] = 1.0; cx2[0] = 1.0; cy_orig[0] = 0; cy_flipped[0] = 2; // Flipped to Class 2
+    cx1[1] = 1.2; cx2[1] = 1.4; cy_orig[1] = 0; cy_flipped[1] = 2; // Flipped to Class 2
+    cx1[2] = 0.8; cx2[2] = 1.1; cy_orig[2] = 0; cy_flipped[2] = 2; // Flipped to Class 2
+
+    cx1[3] = 5.0; cx2[3] = 5.0; cy_orig[3] = 1; cy_flipped[3] = 1;
+    cx1[4] = 4.8; cx2[4] = 5.2; cy_orig[4] = 1; cy_flipped[4] = 1;
+    cx1[5] = 5.3; cx2[5] = 4.9; cy_orig[5] = 1; cy_flipped[5] = 1;
+
+    cx1[6] = 1.0; cx2[6] = 8.0; cy_orig[6] = 2; cy_flipped[6] = 2;
+    cx1[7] = 1.5; cx2[7] = 7.8; cy_orig[7] = 2; cy_flipped[7] = 2;
+    cx1[8] = 0.9; cx2[8] = 8.2; cy_orig[8] = 2; cy_flipped[8] = 2;
+
+    // Query (1.1, 1.2)
+    let qx1 = 1.1; let qx2 = 1.2;
+    let dists = alloc(float, n);
+    let idx = alloc(int, n);
+    for (let i = 0; i < n; i++) {
+        let d1 = qx1 - cx1[i]; let d2 = qx2 - cx2[i];
+        dists[i] = sqrt(d1 * d1 + d2 * d2);
+        idx[i] = i;
+    }
+    // Sort top 3
+    for (let i = 0; i < 3; i++) {
+        let min_i = i;
+        for (let j = i + 1; j < n; j++) {
+            if (dists[j] < dists[min_i]) { min_i = j; }
+        }
+        let td = dists[i]; dists[i] = dists[min_i]; dists[min_i] = td;
+        let ti = idx[i]; idx[i] = idx[min_i]; idx[min_i] = ti;
+    }
+
+    let vote_o0 = 0; let vote_o2 = 0;
+    let vote_f0 = 0; let vote_f2 = 0;
+    for (let i = 0; i < 3; i++) {
+        if (cy_orig[idx[i]] == 0) { vote_o0++; } else if (cy_orig[idx[i]] == 2) { vote_o2++; }
+        if (cy_flipped[idx[i]] == 0) { vote_f0++; } else if (cy_flipped[idx[i]] == 2) { vote_f2++; }
+    }
+    let pred_orig = 0; if (vote_o2 > vote_o0) { pred_orig = 2; }
+    let pred_flip = 0; if (vote_f2 > vote_f0) { pred_flip = 2; }
+
+    print("\n=== SENSITIVITY CHECK 2: KNN CLASSIFIER ===");
+    print(f"Query (1.1, 1.2) Original Labels Prediction : Class {pred_orig}");
+    print(f"Query (1.1, 1.2) Flipped Labels Prediction  : Class {pred_flip}");
+}
+
+// 3. Logistic Regression Inversion
+fn test_logreg_sensitivity() -> void {
+    let n = 8;
+    let x1 = alloc(float, n);
+    let x2 = alloc(float, n);
+    let y_orig = alloc(float, n);
+    let y_inv = alloc(float, n);
+
+    x1[0] = 1.0; x2[0] = 0.50; y_orig[0] = 0.0; y_inv[0] = 1.0;
+    x1[1] = 2.0; x2[1] = 0.60; y_orig[1] = 0.0; y_inv[1] = 1.0;
+    x1[2] = 2.5; x2[2] = 0.55; y_orig[2] = 0.0; y_inv[2] = 1.0;
+    x1[3] = 3.0; x2[3] = 0.65; y_orig[3] = 0.0; y_inv[3] = 1.0;
+    x1[4] = 6.0; x2[4] = 0.85; y_orig[4] = 1.0; y_inv[4] = 0.0;
+    x1[5] = 7.5; x2[5] = 0.90; y_orig[5] = 1.0; y_inv[5] = 0.0;
+    x1[6] = 8.0; x2[6] = 0.80; y_orig[6] = 1.0; y_inv[6] = 0.0;
+    x1[7] = 9.0; x2[7] = 0.95; y_orig[7] = 1.0; y_inv[7] = 0.0;
+
+    let w1_o = 0.0; let w2_o = 0.0; let b_o = 0.0;
+    let w1_i = 0.0; let w2_i = 0.0; let b_i = 0.0;
+    let lr = 0.1;
+
+    for (let ep = 0; ep < 3000; ep++) {
+        let gw1_o = 0.0; let gw2_o = 0.0; let gb_o = 0.0;
+        let gw1_i = 0.0; let gw2_i = 0.0; let gb_i = 0.0;
+
+        for (let i = 0; i < n; i++) {
+            let zo = w1_o * x1[i] + w2_o * x2[i] + b_o;
+            let yo_hat = 1.0 / (1.0 + exp(-zo));
+            let erro = yo_hat - y_orig[i];
+            gw1_o += erro * x1[i]; gw2_o += erro * x2[i]; gb_o += erro;
+
+            let zi = w1_i * x1[i] + w2_i * x2[i] + b_i;
+            let yi_hat = 1.0 / (1.0 + exp(-zi));
+            let erri = yi_hat - y_inv[i];
+            gw1_i += erri * x1[i]; gw2_i += erri * x2[i]; gb_i += erri;
+        }
+
+        w1_o -= lr * (gw1_o / 8.0); w2_o -= lr * (gw2_o / 8.0); b_o -= lr * (gb_o / 8.0);
+        w1_i -= lr * (gw1_i / 8.0); w2_i -= lr * (gw2_i / 8.0); b_i -= lr * (gb_i / 8.0);
+    }
+
+    print("\n=== SENSITIVITY CHECK 3: LOGISTIC REGRESSION ===");
+    print(f"Original Labels -> w1={w1_o}, w2={w2_o}, b={b_o}");
+    print(f"Inverted Labels -> w1={w1_i}, w2={w2_i}, b={b_i}");
+    print(f"Sum (w_orig + w_inv) -> w1: {w1_o + w1_i}, w2: {w2_o + w2_i}, b: {b_o + b_i} (Expect 0.0)");
+}
+
+// 4. Transformer Query Shift
+fn test_transformer_sensitivity() -> void {
+    // Single query attending to 2 keys: K = [[1, 0], [0, 1]]
+    // If Q = [1, 0], weight to Key 0 should dominate
+    // If Q = [0, 1], weight to Key 1 should dominate
+    let scale = 1.0 / sqrt(2.0);
+
+    // Case A: Q = [2, 0]
+    let s0_a = 2.0 * scale; let s1_a = 0.0 * scale;
+    let exp0_a = exp(s0_a); let exp1_a = exp(s1_a);
+    let p0_a = exp0_a / (exp0_a + exp1_a);
+    let p1_a = exp1_a / (exp0_a + exp1_a);
+
+    // Case B: Q = [0, 2]
+    let s0_b = 0.0 * scale; let s1_b = 2.0 * scale;
+    let exp0_b = exp(s0_b); let exp1_b = exp(s1_b);
+    let p0_b = exp0_b / (exp0_b + exp1_b);
+    let p1_b = exp1_b / (exp0_b + exp1_b);
+
+    print("\n=== SENSITIVITY CHECK 4: TRANSFORMER ATTENTION ===");
+    print(f"Query [2, 0] Attention Weights -> [Key 0: {p0_a}, Key 1: {p1_a}] (Key 0 dominates!)");
+    print(f"Query [0, 2] Attention Weights -> [Key 0: {p0_b}, Key 1: {p1_b}] (Key 1 dominates!)");
+}
+
+// 5. PCA Coordinate Rescaling
+fn test_pca_sensitivity() -> void {
+    // 2D data: x0 has variance 1.0, x1 has variance 100.0
+    // Covariance: [[1.0, 0.0], [0.0, 100.0]]
+    // Principal component 1 MUST align with x1 axis: [0, 1] with eigenvalue 100
+    let cov00 = 1.0; let cov01 = 0.0;
+    let cov10 = 0.0; let cov11 = 100.0;
+
+    let v0 = 0.7071; let v1 = 0.7071;
+    for (let it = 0; it < 30; it++) {
+        let w0 = cov00 * v0 + cov01 * v1;
+        let w1 = cov10 * v0 + cov11 * v1;
+        let norm = sqrt(w0 * w0 + w1 * w1);
+        v0 = w0 / norm;
+        v1 = w1 / norm;
+    }
+    let lambda1 = v0 * (cov00 * v0 + cov01 * v1) + v1 * (cov10 * v0 + cov11 * v1);
+
+    print("\n=== SENSITIVITY CHECK 5: PCA AXIS ORIENTATION ===");
+    print(f"Anisotropic Covariance [Var(x0)=1.0, Var(x1)=100.0]");
+    print(f"Dominant Eigenvalue λ1 = {lambda1} (Exact 100.0 expected)");
+    print(f"Dominant Eigenvector v1 = [{v0}, {v1}] (Exact [0, 1] expected)");
+}
+
+fn main() -> int {
+    test_ols_sensitivity();
+    test_knn_sensitivity();
+    test_logreg_sensitivity();
+    test_transformer_sensitivity();
+    test_pca_sensitivity();
+    return 0;
+}

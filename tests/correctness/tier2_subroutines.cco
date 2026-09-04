@@ -1,0 +1,194 @@
+// Tier 2 Mathematical Subroutines Isolation Test in Cco
+
+fn sigmoid_fn(z: float) -> float {
+    if (z > 15.0) { return 1.0; }
+    if (z < -15.0) { return 0.0; }
+    return 1.0 / (1.0 + exp(-z));
+}
+
+fn tanh_fn(u: float) -> float {
+    if (u > 10.0) { return 1.0; }
+    if (u < -10.0) { return -1.0; }
+    let ep = exp(u);
+    let em = exp(-u);
+    return (ep - em) / (ep + em);
+}
+
+// -------------------------------------------------------------
+// 1. Transformer Attention Subroutine (from 31_transformer.cco)
+// -------------------------------------------------------------
+fn test_transformer_attention() -> void {
+    let t_steps = 3;
+    let d_k = 2;
+
+    let q = alloc(float, t_steps * d_k);
+    let k = alloc(float, t_steps * d_k);
+    let v = alloc(float, t_steps * d_k);
+
+    // Q: [ [1, 0], [0, 1], [1, 1] ]
+    q[0] = 1.0; q[1] = 0.0;
+    q[2] = 0.0; q[3] = 1.0;
+    q[4] = 1.0; q[5] = 1.0;
+
+    // K: [ [1, 0], [1, 1], [0, 1] ]
+    k[0] = 1.0; k[1] = 0.0;
+    k[2] = 1.0; k[3] = 1.0;
+    k[4] = 0.0; k[5] = 1.0;
+
+    // V: [ [2, 3], [4, 5], [6, 7] ]
+    v[0] = 2.0; v[1] = 3.0;
+    v[2] = 4.0; v[3] = 5.0;
+    v[4] = 6.0; v[5] = 7.0;
+
+    let scale = 1.0 / sqrt(1.0 * d_k);
+    let attn_weights = alloc(float, t_steps * t_steps);
+    let out_ctx = alloc(float, t_steps * d_k);
+
+    for (let i = 0; i < t_steps; i++) {
+        let max_score = -999999.0;
+        let scores = alloc(float, t_steps);
+
+        for (let j = 0; j < t_steps; j++) {
+            let dot = 0.0;
+            for (let c = 0; c < d_k; c++) {
+                dot += q[i * d_k + c] * k[j * d_k + c];
+            }
+            scores[j] = dot * scale;
+            if (scores[j] > max_score) { max_score = scores[j]; }
+        }
+
+        let sum_exp = 0.0;
+        for (let j = 0; j < t_steps; j++) {
+            let e = exp(scores[j] - max_score);
+            attn_weights[i * t_steps + j] = e;
+            sum_exp += e;
+        }
+
+        for (let j = 0; j < t_steps; j++) {
+            attn_weights[i * t_steps + j] /= sum_exp;
+        }
+
+        for (let c = 0; c < d_k; c++) {
+            let sum_v = 0.0;
+            for (let j = 0; j < t_steps; j++) {
+                sum_v += attn_weights[i * t_steps + j] * v[j * d_k + c];
+            }
+            out_ctx[i * d_k + c] = sum_v;
+        }
+    }
+
+    print("=== TIER 2: TRANSFORMER ATTENTION ===");
+    for (let i = 0; i < t_steps; i++) {
+        print(f"Row {i} Weights: [{attn_weights[i * 3 + 0]}, {attn_weights[i * 3 + 1]}, {attn_weights[i * 3 + 2]}]");
+        print(f"Row {i} Output : [{out_ctx[i * 2 + 0]}, {out_ctx[i * 2 + 1]}]");
+    }
+}
+
+// -------------------------------------------------------------
+// 2. LSTM Forward Gate Subroutine (from 28_lstm.cco)
+// -------------------------------------------------------------
+fn test_lstm_forward_step() -> void {
+    let xt = 0.5;
+    let prev_h0 = 0.2; let prev_h1 = -0.1;
+    let prev_c0 = 0.4; let prev_c1 = 0.3;
+
+    // Weights for gate 0 and gate 1
+    let z_f0 = 0.5 * xt + 0.1 * prev_h0 + 0.2 * prev_h1 + 0.1;
+    let z_f1 = -0.2 * xt - 0.1 * prev_h0 + 0.3 * prev_h1 + 0.0;
+
+    let z_i0 = 0.3 * xt + 0.2 * prev_h0 - 0.1 * prev_h1 + 0.0;
+    let z_i1 = 0.4 * xt + 0.1 * prev_h0 + 0.1 * prev_h1 + 0.1;
+
+    let z_c0 = -0.2 * xt + 0.3 * prev_h0 + 0.1 * prev_h1 + 0.1;
+    let z_c1 = 0.5 * xt - 0.2 * prev_h0 + 0.2 * prev_h1 - 0.1;
+
+    let z_o0 = 0.4 * xt - 0.1 * prev_h0 + 0.2 * prev_h1 + 0.2;
+    let z_o1 = -0.3 * xt + 0.2 * prev_h0 - 0.1 * prev_h1 + 0.1;
+
+    let f0 = sigmoid_fn(z_f0); let f1 = sigmoid_fn(z_f1);
+    let i0 = sigmoid_fn(z_i0); let i1 = sigmoid_fn(z_i1);
+    let c_tilde0 = tanh_fn(z_c0); let c_tilde1 = tanh_fn(z_c1);
+    let o0 = sigmoid_fn(z_o0); let o1 = sigmoid_fn(z_o1);
+
+    let c0 = f0 * prev_c0 + i0 * c_tilde0;
+    let c1 = f1 * prev_c1 + i1 * c_tilde1;
+
+    let h0 = o0 * tanh_fn(c0);
+    let h1 = o1 * tanh_fn(c1);
+
+    print("\n=== TIER 2: LSTM FORWARD CELL ===");
+    print(f"Forget Gates: [{f0}, {f1}]");
+    print(f"Input Gates : [{i0}, {i1}]");
+    print(f"C_tilde     : [{c_tilde0}, {c_tilde1}]");
+    print(f"Output Gates: [{o0}, {o1}]");
+    print(f"Cell State  : [{c0}, {c1}]");
+    print(f"Hidden State: [{h0}, {h1}]");
+}
+
+// -------------------------------------------------------------
+// 3. VAE KL Divergence Closed-Form (from 34_vae.cco)
+// -------------------------------------------------------------
+fn test_vae_kl_divergence() -> void {
+    let mu0 = 0.5; let mu1 = -0.8;
+    let lv0 = 0.2; let lv1 = -0.4;
+
+    let kl0 = -0.5 * (1.0 + lv0 - mu0 * mu0 - exp(lv0));
+    let kl1 = -0.5 * (1.0 + lv1 - mu1 * mu1 - exp(lv1));
+    let total_kl = kl0 + kl1;
+
+    print("\n=== TIER 2: VAE KL DIVERGENCE ===");
+    print(f"KL Dim 0: {kl0}");
+    print(f"KL Dim 1: {kl1}");
+    print(f"Total KL: {total_kl}");
+}
+
+// -------------------------------------------------------------
+// 4. GAN Binary Cross-Entropy Loss (from 33_gan.cco)
+// -------------------------------------------------------------
+fn test_gan_bce_loss() -> void {
+    let p_real = 0.82;
+    let p_fake = 0.28;
+
+    let d_loss = -(log(p_real) + log(1.0 - p_fake));
+    let g_loss = -log(p_fake);
+
+    print("\n=== TIER 2: GAN BCE LOSS ===");
+    print(f"D Loss: {d_loss}");
+    print(f"G Loss: {g_loss}");
+}
+
+// -------------------------------------------------------------
+// 5. Normalizing Flows Affine Coupling (from 63_normalizing_flows.cco)
+// -------------------------------------------------------------
+fn test_realnvp_coupling() -> void {
+    let x0 = 1.2;
+    let x1 = -0.5;
+
+    let s = tanh_fn(0.4 * x0 + 0.1);
+    let t = 0.8 * x0 - 0.2;
+
+    let y0 = x0;
+    let y1 = x1 * exp(s) + t;
+    let log_det = s;
+
+    // Inverse
+    let inv_x0 = y0;
+    let inv_x1 = (y1 - t) * exp(-s);
+    let diff0 = inv_x0 - x0;
+    let diff1 = inv_x1 - x1;
+
+    print("\n=== TIER 2: REALNVP AFFINE COUPLING ===");
+    print(f"Forward y: [{y0}, {y1}]");
+    print(f"Log Det Jacobian: {log_det}");
+    print(f"Inverse x: [{inv_x0}, {inv_x1}]");
+    print(f"Inversion Diff: [{diff0}, {diff1}]");
+}
+
+fn main() -> int {
+    test_transformer_attention();
+    test_lstm_forward_step();
+    test_vae_kl_divergence();
+    test_gan_bce_loss();
+    test_realnvp_coupling();
+    return 0;
+}
