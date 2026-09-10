@@ -36,35 +36,29 @@ cco-examples/
 
 Use the Cco compiler built from the official [cco-lang](https://github.com/Rohinthan/cco-lang) repository.
 
-### Mode A: Direct Execution (`--run`)
+### Mode A: Direct Execution
 
-Compile and execute any example in a single step using `--run`:
+Compile and execute any example in a single step to execute 
 
 ```bash
 # Direct run
-/path/to/cco codebase/01_hello.cco --run
-/path/to/cco algorithms/01_linear_regression.cco --run
+make cco
 ```
-
-#### Why Use `--run`?
-Cco transpiles to portable ISO C11 rather than using an interpreter or virtual machine. The `--run` flag transpiles the `.cco` source code into intermediate C, invokes `gcc -O3 -Wall -Wextra -std=c11` in the background with math library linking (`-lm`), executes the native binary immediately, and forwards its exit status code.
-
-### Mode B: Standalone Native Binary Compilation
-
-For production compilation and deployment:
 
 ```bash
-# Step 1: Transpile Cco to standard ISO C11
-/path/to/cco algorithms/01_linear_regression.cco -o build/linear_regression.c
-
-# Step 2: Compile to native machine binary
-gcc -Wall -Wextra -Werror -pedantic-errors -std=c11 build/linear_regression.c -o build/linear_regression -lm
-
-# Step 3: Run native executable
-./build/linear_regression
+make install
 ```
 
----
+And now can execute with cco on the file :
+
+```bash
+cco filename.cco -o filename 
+```
+and now run the bin 
+
+```bash
+./filename 
+```
 
 ## Verification & Memory Safety
 
