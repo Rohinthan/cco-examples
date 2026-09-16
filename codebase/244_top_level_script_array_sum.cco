@@ -1,0 +1,16 @@
+// 244_top_level_script_array_sum.cco — Top-level script dynamic allocation and loops
+// Demonstrates heap allocation and loops in top-level script style with 0 memory leaks.
+
+let size: int = 5;
+let numbers: int = alloc(int, size);
+
+for (let i: int = 0; i < size; i++) {
+    numbers[i] = (i + 1) * 10;
+}
+
+let sum: int = 0;
+for (let i: int = 0; i < size; i++) {
+    sum += numbers[i];
+}
+
+print(sum);
