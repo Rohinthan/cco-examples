@@ -11,13 +11,14 @@ A curated repository of official code examples, machine learning algorithms, dat
 
 ```
 cco-examples/
-├── codebase/                    # 240+ comprehensive Cco language examples & test cases
+├── codebase/                    # 244+ comprehensive Cco language examples & test cases
 │   ├── 01_hello.cco ... 100_while_break.cco
 │   ├── 101_while_continue.cco ... 180_struct_alignment_optimized.cco
 │   ├── 181_enum_level_match.cco ... 220_cpp_strings_and_formatting.cco
 │   ├── 221_cpp_intro_procedural_vs_oop.cco ... 233_live_socket_tcp_server.cco
 │   ├── 234_scope_exit_control_flow_gauntlet.cco ... 240_stateful_map_db_http_server.cco
-│   └── 241_linear_regression_variants.cco
+│   ├── 241_linear_regression_variants.cco
+│   └── 242_top_level_script_hello.cco ... 244_top_level_script_array_sum.cco
 │
 ├── algorithms/                  # 65 Machine Learning & Scientific Computing Implementations
 │   ├── 01_linear_regression.cco ... 13_xgboost_lightgbm.cco
@@ -36,7 +37,30 @@ cco-examples/
 
 Use the Cco compiler built from the official [cco-lang](https://github.com/Rohinthan/cco-lang) repository.
 
-### Mode A: Direct Execution
+### Top-Level Script Syntax (Python-Style Direct Execution)
+
+Entry files can execute statements directly at the top level without boilerplate `fn main() -> int { ... return 0; }`:
+
+```cco
+// codebase/242_top_level_script_hello.cco
+let greeting: string = "Hello, Cco World!";
+let year: int = 2026;
+print(greeting);
+print(year);
+```
+
+Run directly:
+```bash
+cco codebase/242_top_level_script_hello.cco --run
+```
+
+Or compile to a native binary:
+```bash
+cco codebase/242_top_level_script_hello.cco -o hello
+./hello
+```
+
+### Direct Execution & Compilation
 
 Compile and execute any example in a single step to execute 
 
@@ -57,8 +81,9 @@ cco filename.cco -o filename
 and now run the bin 
 
 ```bash
-./filename 
 ```
+
+---
 
 ## Verification & Memory Safety
 
