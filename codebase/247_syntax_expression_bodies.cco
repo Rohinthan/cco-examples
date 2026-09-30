@@ -1,0 +1,8 @@
+// 247_syntax_expression_bodies.cco — Expression-bodied concise functions
+# Function with single expression body
+
+fn square(x: int) -> int = x * x;
+fn add(a: int, b: int) -> int = a + b;
+
+print(square(6));
+print(add(10, 25));

@@ -1,0 +1,13 @@
+// 246_syntax_boolean_keywords.cco — Python-style boolean operators
+# Demonstrates 'and', 'or', 'not' keywords
+
+active = true;
+ready = false;
+
+if active and not ready {
+    print("Initializing system...");
+}
+
+if active or ready {
+    print("System active.");
+}

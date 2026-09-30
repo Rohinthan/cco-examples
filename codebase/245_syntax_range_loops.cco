@@ -1,0 +1,8 @@
+// 245_syntax_range_loops.cco — Python-style range loops
+# Range loop iteration over half-open interval
+
+total = 0;
+for i in 0..10 {
+    total += i;
+}
+print(total);

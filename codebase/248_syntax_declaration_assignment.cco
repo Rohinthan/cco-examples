@@ -1,0 +1,13 @@
+// 248_syntax_declaration_assignment.cco — Declaration-by-assignment without 'let'
+# Demonstrates Python-like variable creation and explicit type annotations
+
+x = 42;
+name = "Cco Language";
+pi: float = 3.14159;
+
+print(x);
+print(name);
+print(pi);
+
+x += 8;
+print(x);
