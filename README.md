@@ -34,6 +34,11 @@ cco-examples/
 │   ├── run_benchmarks.py        # Automated test harness & statistical metrics collector
 │   └── results/                 # Raw timing, binary size, and code statistics CSV logs
 │
+├── examples/                    # Standard introductory tutorials & language showcases
+│   ├── 01_hello_world.cco ... 13_number_guess.cco
+│   ├── 10_import_demo/          # Multi-file module import demonstration
+│   └── word_frequency.cco, printable_interface.cco, vec2_operators.cco
+│
 ├── tests/correctness/           # Subroutine & sensitivity test suites verified against Python
 └── docs/                        # Formal verification documentation
 ```
